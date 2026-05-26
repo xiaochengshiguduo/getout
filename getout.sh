@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.1.3"
+SCRIPT_VERSION="0.1.4"
 INSTALL_PATH="/usr/local/bin/getout"
 UPDATE_URL="https://raw.githubusercontent.com/xiaochengshiguduo/getout/main/getout.sh"
 export DEBIAN_FRONTEND=noninteractive
@@ -180,6 +180,15 @@ download_dns64_only() {
   return "$rc"
 }
 
+download_file() {
+  local url="$1" output="$2"
+  if curl -fL --connect-timeout 20 --retry 2 --retry-delay 1 -o "$output" "$url"; then
+    return 0
+  fi
+  warn "常规下载失败，尝试 DNS64 下载。"
+  download_dns64_only "$url" "$output"
+}
+
 download_gost() {
   local arch url tmp
   arch="$(arch_gost)"
@@ -187,7 +196,7 @@ download_gost() {
   tmp="$(mktemp)"
   trap 'rm -f "$tmp"' RETURN
   info "下载 gost：$url"
-  download_dns64_only "$url" "$tmp" || fatal "gost 下载失败：所有 DNS64 服务器均不可用。"
+  download_file "$url" "$tmp" || fatal "gost 下载失败：常规下载和 DNS64 均不可用。"
   gunzip -c "$tmp" > "$GOST_BIN"
   chmod +x "$GOST_BIN"
   rm -f "$tmp"
@@ -201,7 +210,7 @@ download_hev() {
   tmp="$(mktemp)"
   trap 'rm -f "$tmp"' RETURN
   info "下载 hev-socks5-tunnel：$url"
-  download_dns64_only "$url" "$tmp" || fatal "hev-socks5-tunnel 下载失败：所有 DNS64 服务器均不可用。"
+  download_file "$url" "$tmp" || fatal "hev-socks5-tunnel 下载失败：常规下载和 DNS64 均不可用。"
   install -m 0755 "$tmp" "$TUN_BIN"
   rm -f "$tmp"
   trap - RETURN
