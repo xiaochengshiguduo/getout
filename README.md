@@ -28,11 +28,13 @@
 
 ## 快速使用
 
+一键下载并打开管理面板：
+
 ```bash
-bash getout.sh
+wget -N https://raw.githubusercontent.com/xiaochengshiguduo/getout/main/getout.sh && bash getout.sh
 ```
 
-或者直接运行指定模式：
+也可以下载后直接运行指定模式：
 
 ```bash
 bash getout.sh server
