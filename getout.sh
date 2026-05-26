@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.1.2"
+SCRIPT_VERSION="0.1.3"
 INSTALL_PATH="/usr/local/bin/getout"
 UPDATE_URL="https://raw.githubusercontent.com/xiaochengshiguduo/getout/main/getout.sh"
 export DEBIAN_FRONTEND=noninteractive
@@ -16,7 +16,8 @@ CLIENT_CONF="$CONF_DIR/client.conf"
 TUN_CONF="$CONF_DIR/tun2socks.yaml"
 ROUTES_UP="$CONF_DIR/routes-up.sh"
 ROUTES_DOWN="$CONF_DIR/routes-down.sh"
-RUNTIME_DNS_SERVERS=("2001:4860:4860::8888" "2606:4700:4700::1111")
+RUNTIME_DNS_SERVERS=("8.8.8.8" "1.1.1.1")
+RUNTIME_DNS_V6_SERVERS=("2001:4860:4860::8888" "2606:4700:4700::1111")
 RESOLV_ORIG="$CONF_DIR/resolv.conf.orig"
 
 GOST_BIN="/usr/local/bin/getout-gost"
@@ -492,11 +493,30 @@ install_server() {
   start_server
 }
 
+has_default_ipv4_route() {
+  ip -4 route show default 2>/dev/null | grep -q .
+}
+
+has_public_ipv4_exit() {
+  local ip
+  ip="$(curl -4 -s --connect-timeout 5 --max-time 8 https://api.ipify.org 2>/dev/null || curl -4 -s --connect-timeout 5 --max-time 8 http://v4.ident.me 2>/dev/null || true)"
+  is_ipv4 "$ip"
+}
+
+runtime_dns_servers_text() {
+  if has_default_ipv4_route || has_public_ipv4_exit; then
+    printf '%s\n' "${RUNTIME_DNS_SERVERS[*]}"
+  else
+    printf '%s\n' "${RUNTIME_DNS_V6_SERVERS[*]}"
+  fi
+}
+
 write_client_conf() {
-  local mode="$1" address="$2" port="$3" username="$4" password="$5" ssh_ip v4 v6
+  local mode="$1" address="$2" port="$3" username="$4" password="$5" ssh_ip v4 v6 runtime_dns
   ssh_ip="$(ssh_remote_ip || true)"
   v4="$(main_ipv4 || true)"
   v6="$(main_ipv6 || true)"
+  runtime_dns="$(runtime_dns_servers_text)"
   mkdir -p "$CONF_DIR"
   {
     printf 'MODE=%s\n' "$(shell_quote "$mode")"
@@ -510,7 +530,7 @@ write_client_conf() {
     printf 'TABLE_ID=%s\n' "$(shell_quote "$TABLE_ID")"
     printf 'MARK_ID=%s\n' "$(shell_quote "$MARK_ID")"
     printf 'TUN_NAME=%s\n' "$(shell_quote "$TUN_NAME")"
-    printf 'RUNTIME_DNS_SERVERS="2001:4860:4860::8888 2606:4700:4700::1111"\n'
+    printf 'RUNTIME_DNS_SERVERS=%s\n' "$(shell_quote "$runtime_dns")"
     printf 'RUNTIME_DNS_ENABLE=1\n'
   } > "$CLIENT_CONF"
 }

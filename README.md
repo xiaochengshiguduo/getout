@@ -1,21 +1,22 @@
 # getout
 
-`getout` 是一个 Debian 专用的出口代理管理脚本，适合纯 IPv6 VPS 使用。
+`getout` 是一个 Debian VPS 代理出口管理脚本，用于快速配置入口 SOCKS5 服务、本机 IPv4 出口代理、以及 IPv4+IPv6 双栈出口代理。
 
-它把入口 SOCKS5 服务端、IPv4 全局出口、IPv4+IPv6 双栈全局出口整合到一个脚本里，并提供交互式管理面板。
+它把入口代理、出口代理、路由接管、DNS 切换、systemd 服务和交互式管理面板整合到一个全局命令里。
 
 ## 功能
 
-- 入口模式：使用 `gost` 启动本机 SOCKS5 服务端。
-- V4 单栈模式：使用 `hev-socks5-tunnel` 接管 IPv4 流量，IPv6 保持原生。
-- V4+V6 双栈模式：使用 `hev-socks5-tunnel` 同时接管 IPv4 和 IPv6 流量。
-- 下载阶段固定使用 DNS64，方便纯 IPv6 机器直接拉取 GitHub Release 二进制。
-- 运行期 DNS 使用普通 IPv6 resolver，停止或卸载时自动恢复。
-- SSH 安全保护：自动保护当前 SSH 来源、上游 SOCKS5 地址、DNS 地址，避免全局路由接管后断连。
+- 入口模式：使用 `gost` 在当前 VPS 上启动 SOCKS5 服务端。
+- V4 单栈模式：使用 `hev-socks5-tunnel` 接管本机 IPv4 流量，IPv6 保持原生。
+- V4+V6 双栈模式：使用 `hev-socks5-tunnel` 同时接管本机 IPv4 和 IPv6 流量。
+- 全局命令：首次运行后自动安装 `/usr/local/bin/getout`，之后直接输入 `getout` 打开管理面板。
+- 一键更新：支持 `getout update` 或在管理面板选择 `8.更新 getout`。
+- 自动 DNS 策略：检测到默认 IPv4 路由或公网 IPv4 出口可用时使用 IPv4 DNS，否则使用 IPv6 DNS。
+- 下载阶段保留 DNS64 兜底，方便纯 IPv6 VPS 拉取 GitHub Release 二进制。
+- SSH / 上游 SOCKS5 / DNS 路由保护，降低出口模式接管路由后断联的风险。
 - 入口/出口互斥：启动入口模式会停止出口模式；启动出口模式会停止入口模式。
 - 自启动跟随当前状态：运行中则启用开机自启，手动关闭则关闭开机自启。
-- 首次运行自动安装全局命令 `getout`。
-- 支持修改入口信息、修改出口信息、重启、状态查看、一键更新、卸载清理。
+- 支持修改入口信息、修改出口信息、重启、状态查看、更新、卸载清理。
 
 ## 系统要求
 
@@ -23,7 +24,7 @@
 - root 权限
 - `/dev/net/tun` 可用
 - systemd
-- 纯 IPv6 或双栈 VPS 均可
+- 支持 IPv4、IPv6 或双栈 VPS
 
 ## 快速使用
 
@@ -33,16 +34,10 @@
 bash <(curl -fsSL https://raw.githubusercontent.com/xiaochengshiguduo/getout/main/getout.sh)
 ```
 
-如果当前系统没有 `curl`，也可以使用 `wget`：
-
-```bash
-wget -qO- https://raw.githubusercontent.com/xiaochengshiguduo/getout/main/getout.sh | bash
-```
-
 首次运行会自动安装全局命令：
 
-```bash
-getout
+```text
+/usr/local/bin/getout
 ```
 
 之后直接运行：
@@ -94,7 +89,7 @@ getout uninstall
 
 ### 入口模式
 
-本机作为 SOCKS5 服务端，对外提供代理入口。
+当前 VPS 作为 SOCKS5 服务端，对外提供代理入口。
 
 对应服务：
 
@@ -112,13 +107,24 @@ getout-gost.service
 
 通过上游 SOCKS5 接管本机 IPv4 流量，IPv6 保持原生。
 
-适合：IPv6-only VPS 想要访问 IPv4 网络。
+适合：希望当前 VPS 的 IPv4 出口走指定 SOCKS5，上游 IPv6 和本机 IPv6 保持直连。
 
 ### V4+V6 双栈模式
 
-通过上游 SOCKS5 同时接管 IPv4 和 IPv6 流量。
+通过上游 SOCKS5 同时接管本机 IPv4 和 IPv6 流量。
 
-适合：希望本机所有公网流量统一走指定 SOCKS5 出口。
+适合：希望当前 VPS 的公网流量统一走指定 SOCKS5 出口。
+
+## DNS 策略
+
+出口模式运行时，`getout` 会根据当前 VPS 网络能力自动选择运行期 DNS：
+
+- 检测到默认 IPv4 路由或公网 IPv4 出口可用：使用 `8.8.8.8` / `1.1.1.1`。
+- 未检测到 IPv4 能力：使用 `2001:4860:4860::8888` / `2606:4700:4700::1111`。
+
+下载二进制时仍保留 DNS64 兜底，以兼容纯 IPv6 环境。
+
+停止出口模式或卸载时会恢复原始 DNS。
 
 ## 文件位置
 
@@ -168,7 +174,7 @@ getout uninstall
 
 - 仅支持 Debian。
 - 脚本会在下载二进制阶段临时修改 `/etc/resolv.conf` 使用 DNS64，下载结束后恢复。
-- 出口模式运行时会临时修改 `/etc/resolv.conf` 为普通 IPv6 DNS，停止或卸载时恢复。
+- 出口模式运行时会临时修改 `/etc/resolv.conf`，停止或卸载时恢复。
 - 请确保 VPS 面板已开启 TUN。
 - 状态页会明文显示入口/出口密码，请只在可信终端使用。
 
@@ -176,7 +182,8 @@ getout uninstall
 
 - Debian GNU/Linux 11 bullseye
 - x86_64
-- 纯 IPv6 VPS
+- IPv6 VPS
+- IPv4 VPS
 - `gost v2.11.5`
 - `hev-socks5-tunnel 2.15.0`
 
