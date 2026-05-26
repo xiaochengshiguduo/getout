@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.1.0"
+SCRIPT_VERSION="0.1.1"
+INSTALL_PATH="/usr/local/bin/getout"
+UPDATE_URL="https://raw.githubusercontent.com/xiaochengshiguduo/getout/main/getout.sh"
 export DEBIAN_FRONTEND=noninteractive
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'
@@ -40,6 +42,64 @@ success() { echo -e "${GREEN}[成功]${NC} $*"; }
 warn() { echo -e "${YELLOW}[警告]${NC} $*"; }
 err() { echo -e "${RED}[错误]${NC} $*" >&2; }
 fatal() { err "$*"; exit 1; }
+
+running_from_install_path() {
+  local src="${BASH_SOURCE[0]:-$0}" real_src real_install
+  [ "$src" = "$INSTALL_PATH" ] && return 0
+  if command -v realpath >/dev/null 2>&1; then
+    real_src="$(realpath "$src" 2>/dev/null || true)"
+    real_install="$(realpath "$INSTALL_PATH" 2>/dev/null || true)"
+    [ -n "$real_src" ] && [ -n "$real_install" ] && [ "$real_src" = "$real_install" ] && return 0
+  fi
+  return 1
+}
+
+extract_script_version() {
+  sed -n 's/^SCRIPT_VERSION="\([^"]\+\)".*/\1/p' "$1" | head -n1
+}
+
+install_from_update_url() {
+  local mode="${1:-install}" tmp version
+  tmp="/tmp/getout-${mode}.$$"
+  trap 'rm -f "$tmp"' RETURN EXIT
+
+  rm -f "$tmp"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --connect-timeout 20 --retry 2 --retry-delay 1 "$UPDATE_URL" -o "$tmp" || fatal "getout 下载失败。"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$tmp" "$UPDATE_URL" || fatal "getout 下载失败。"
+  else
+    fatal "未找到 curl 或 wget，无法下载安装 getout。"
+  fi
+
+  [ -s "$tmp" ] || fatal "getout 下载结果为空。"
+  bash -n "$tmp" || fatal "getout 语法校验失败，已取消安装。"
+  grep -q 'getout 管理面板' "$tmp" || fatal "getout 特征校验失败，已取消安装。"
+  grep -q '^SCRIPT_VERSION=' "$tmp" || fatal "getout 版本校验失败，已取消安装。"
+  grep -q '^UPDATE_URL=' "$tmp" || fatal "getout 更新源校验失败，已取消安装。"
+  version="$(extract_script_version "$tmp")"
+  [ -n "$version" ] || fatal "无法读取 getout 版本号，已取消安装。"
+
+  install -m 0755 "$tmp" "$INSTALL_PATH"
+  rm -f "$tmp"
+  trap - RETURN EXIT
+
+  if [ "$mode" = "update" ]; then
+    success "getout 已更新，当前版本 ${version}。"
+  else
+    success "已安装全局命令：getout。"
+  fi
+}
+
+ensure_global_command() {
+  running_from_install_path && return 0
+  install_from_update_url install
+}
+
+update_getout() {
+  require_root
+  install_from_update_url update
+}
 
 require_root() {
   [ "${EUID:-$(id -u)}" -eq 0 ] || fatal "请使用 root 权限运行：sudo bash $0"
@@ -649,6 +709,7 @@ uninstall_all() {
   systemctl disable getout-tun.service getout-gost.service 2>/dev/null || true
   rm -f "$TUN_SERVICE" "$GOST_SERVICE"
   rm -f "$TUN_BIN" "$GOST_BIN"
+  rm -f "$INSTALL_PATH"
   rm -rf "$CONF_DIR"
   systemctl daemon-reload 2>/dev/null || true
   systemctl reset-failed getout-tun.service getout-gost.service 2>/dev/null || true
@@ -721,16 +782,6 @@ status() {
   fi
 
   echo
-  echo "运行期 DNS:"
-  if [ -f "$CLIENT_CONF" ]; then
-    # shellcheck disable=SC1090
-    . "$CLIENT_CONF"
-    for dns in ${RUNTIME_DNS_SERVERS:-2001:4860:4860::8888 2606:4700:4700::1111}; do echo "$dns"; done
-  else
-    for dns in "${RUNTIME_DNS_SERVERS[@]}"; do echo "$dns"; done
-  fi
-
-  echo
   echo "出口测试:"
   echo -n "IPv4: "; curl -4 -s --connect-timeout 8 --max-time 12 https://api.ipify.org || curl -4 -s --connect-timeout 8 --max-time 12 http://v4.ident.me || echo -n "失败"; echo
   echo -n "IPv6: "; curl -6 -s --connect-timeout 8 --max-time 12 https://api64.ipify.org || curl -6 -s --connect-timeout 8 --max-time 12 http://v6.ident.me || echo -n "失败"; echo
@@ -760,10 +811,11 @@ menu() {
   echo "5.修改出口信息"
   echo "6.重启 getout"
   echo "7.查看状态"
-  echo "8.卸载 getout"
-  echo "9.退出"
+  echo "8.更新 getout"
+  echo "9.卸载 getout"
+  echo "10.退出"
   echo
-  read -rp "请选择 [1-9]: " choice
+  read -rp "请选择 [1-10]: " choice
   case "$choice" in
     1) if server_active; then stop_server; else start_server; fi ;;
     2) configure_server ;;
@@ -772,15 +824,16 @@ menu() {
     5) configure_client ;;
     6) restart_getout ;;
     7) status ;;
-    8) read -rp "确认卸载 getout? [y/N]: " yn; [[ "$yn" =~ ^[Yy]$ ]] && uninstall_all || echo "已取消" ;;
-    9) exit 0 ;;
+    8) update_getout ;;
+    9) read -rp "确认卸载 getout? [y/N]: " yn; [[ "$yn" =~ ^[Yy]$ ]] && uninstall_all || echo "已取消" ;;
+    10) exit 0 ;;
     *) fatal "无效选项。" ;;
   esac
 }
 
 usage() {
   cat <<EOF
-用法：bash getout.sh [server|v4|dual|stop|restart|status|uninstall]
+用法：getout [server|v4|dual|stop|restart|status|update|uninstall]
 
 server     启动入口模式，复用已有入口配置；没有配置时询问
 v4         启动 V4 单栈出口模式，复用已有出口配置；没有配置时询问
@@ -788,6 +841,7 @@ dual       启动 V4+V6 双栈出口模式，复用已有出口配置；没有�
 stop       关闭当前运行中的 getout 模式，并关闭对应自启动
 restart    重启当前运行中的 getout 模式
 status     查看状态
+update     更新 getout
 uninstall  卸载并清理 getout
 EOF
 }
@@ -804,12 +858,22 @@ stop_current() {
 
 main() {
   case "${1:-}" in
+    -h|--help|help) ;;
+    *) require_root; require_debian ;;
+  esac
+  case "${1:-}" in
+    uninstall|remove|un|-h|--help|help) ;;
+    *) ensure_global_command ;;
+  esac
+
+  case "${1:-}" in
     server) start_server ;;
     v4) start_client v4 ;;
     dual) start_client dual ;;
     stop) stop_current ;;
     restart) restart_getout ;;
     status) status ;;
+    update) update_getout ;;
     uninstall|remove|un) uninstall_all ;;
     -h|--help|help) usage ;;
     "") menu ;;
