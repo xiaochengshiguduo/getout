@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.2
+
+- 更新下载增加 cache-bust，避免 GitHub raw 短时间缓存旧脚本导致校验失败。
+
 ## 0.1.1
 
 - 新增全局命令 `/usr/local/bin/getout`。

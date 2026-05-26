@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.1.1"
+SCRIPT_VERSION="0.1.2"
 INSTALL_PATH="/usr/local/bin/getout"
 UPDATE_URL="https://raw.githubusercontent.com/xiaochengshiguduo/getout/main/getout.sh"
 export DEBIAN_FRONTEND=noninteractive
@@ -59,15 +59,19 @@ extract_script_version() {
 }
 
 install_from_update_url() {
-  local mode="${1:-install}" tmp version
+  local mode="${1:-install}" tmp version download_url
   tmp="/tmp/getout-${mode}.$$"
+  download_url="$UPDATE_URL"
+  if [[ "$download_url" == http://* || "$download_url" == https://* ]]; then
+    download_url="${download_url}?v=${SCRIPT_VERSION}&t=$(date +%s)"
+  fi
   trap 'rm -f "$tmp"' RETURN EXIT
 
   rm -f "$tmp"
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL --connect-timeout 20 --retry 2 --retry-delay 1 "$UPDATE_URL" -o "$tmp" || fatal "getout 下载失败。"
+    curl -fsSL --connect-timeout 20 --retry 2 --retry-delay 1 "$download_url" -o "$tmp" || fatal "getout 下载失败。"
   elif command -v wget >/dev/null 2>&1; then
-    wget -qO "$tmp" "$UPDATE_URL" || fatal "getout 下载失败。"
+    wget -qO "$tmp" "$download_url" || fatal "getout 下载失败。"
   else
     fatal "未找到 curl 或 wget，无法下载安装 getout。"
   fi
