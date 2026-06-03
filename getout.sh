@@ -822,6 +822,22 @@ restart_getout() {
     success "入口模式已重启。"
     status
   elif tun_active; then
+    local mode address port username password
+    mode="$(current_mode)"
+    [ "$mode" = "v4" ] || [ "$mode" = "dual" ] || mode="v4"
+    if [ -f "$CLIENT_CONF" ]; then
+      # shellcheck disable=SC1090
+      . "$CLIENT_CONF"
+      address="${SOCKS_ADDRESS:-}"
+      port="${SOCKS_PORT:-}"
+      username="${SOCKS_USERNAME:-}"
+      password="${SOCKS_PASSWORD:-}"
+      [ -n "$address" ] && [ -n "$port" ] || fatal "出口配置不完整，请先修改出口信息。"
+      write_client_conf "$mode" "$address" "$port" "$username" "$password"
+      write_tun_config
+      write_routes_scripts
+      write_tun_service "$mode"
+    fi
     cleanup_rules
     systemctl restart getout-tun.service
     systemctl enable getout-tun.service >/dev/null 2>&1 || true
