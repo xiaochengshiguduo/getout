@@ -6,7 +6,7 @@
 
 ## 功能
 
-- 入口模式：使用 `gost` 在当前 VPS 上启动 SOCKS5 服务端。
+- 入口模式：使用 `gost` 在当前 VPS 上启动带用户名密码认证的 SOCKS5 服务端。
 - V4 单栈模式：使用 `hev-socks5-tunnel` 接管本机 IPv4 流量，IPv6 保持原生。
 - V4+V6 双栈模式：使用 `hev-socks5-tunnel` 同时接管本机 IPv4 和 IPv6 流量。
 - 全局命令：首次运行后自动安装 `/usr/local/bin/getout`，之后直接输入 `getout` 打开管理面板。
@@ -95,6 +95,8 @@ getout uninstall
 
 当前 VPS 作为 SOCKS5 服务端，对外提供代理入口。
 
+入口模式必须设置用户名和密码，避免误配置为公网开放代理。
+
 对应服务：
 
 ```text
@@ -140,11 +142,14 @@ V6 优先模式会：
 
 停止出口模式或卸载时会恢复原始 DNS 和 `/etc/gai.conf`。
 
+`/etc/gai.conf` 影响的是 glibc 地址选择；部分 Go、Rust、Node 或静态链接程序可能使用自己的解析和地址排序逻辑。
+
 ## 路由保护
 
 出口模式会接管本机主动出站流量，同时保护关键回包不被错误送入 `tun0`：
 
 - 自动检测 SSH 实际监听端口并保护 SSH 回包，不依赖 SSH 是否使用 22 端口；
+- 启动或重启出口模式前会显示 SSH 回包保护检测结果，检测不足时会给出断联风险警告；
 - 保护上游 SOCKS5 和运行期 DNS 路由，避免代理回环；
 - 使用 nftables/conntrack 保护外部主动连入本机的连接回包，避免影响 sing-box、xray、hysteria、tuic、nginx 等本机入站服务。
 
@@ -182,6 +187,14 @@ getout update
 
 更新成功后会显示当前版本。
 
+如果 getout 服务正在运行，更新后建议执行：
+
+```bash
+getout restart
+```
+
+这样可以刷新 systemd 服务文件、`routes-up.sh` 和 `routes-down.sh`。
+
 ## 卸载
 
 ```bash
@@ -201,6 +214,8 @@ getout uninstall
 - 仅支持 Debian。
 - 脚本会在常规下载失败后临时修改 `/etc/resolv.conf` 使用 DNS64，DNS64 下载结束后恢复。
 - 出口模式运行时会临时修改 `/etc/resolv.conf` 和 `/etc/gai.conf`，停止或卸载时恢复。
+- `/etc/getout` 会设置为私有目录，配置文件包含代理账号密码。
+- 入口模式必须设置用户名密码；用户名和密码不能包含空白字符或 URL 保留字符。
 - `ping`/ICMP 不经过 SOCKS 出口代理，出口连通性请优先用 TCP/UDP 应用测试。
 - 请确保 VPS 面板已开启 TUN。
 - 状态页会明文显示入口/出口密码，请只在可信终端使用。

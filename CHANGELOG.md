@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.6
+
+- 入口模式强制启用用户名密码，避免误配置为公网开放代理。
+- 收紧入口/出口认证字符校验，避免 URL 保留字符导致 gost 监听地址解析异常。
+- `/etc/getout` 改为私有目录，入口/出口配置和 tun2socks 配置写入后设置为 `600` 权限。
+- `routes-down.sh` 改为循环清理重复路由规则，并兼容清理旧版 `sport 22` SSH 保护规则。
+- `routes-up.sh` 添加规则前先清理同类规则，降低重复规则残留风险。
+- `/etc/gai.conf` 临时处理改用 `mktemp`，避免可预测 `/tmp` 文件名。
+- DNS64 临时修改 `/etc/resolv.conf` 时增加 RETURN trap 恢复保护。
+- `getout update` 在服务运行中时提示执行 `getout restart` 刷新服务文件和路由脚本。
+- 启动/重启出口模式前显示 SSH 回包保护检测结果，弱检测时给出断联风险警告。
+
 ## 0.1.5
 
 - 新增外部入站连接回包保护：使用 nftables/conntrack 标记外部主动连入本机的连接，避免出口模式影响 sing-box、xray、hysteria、tuic、nginx 等入站服务。

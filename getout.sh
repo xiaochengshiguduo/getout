@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.1.5"
+SCRIPT_VERSION="0.1.6"
 INSTALL_PATH="/usr/local/bin/getout"
 UPDATE_URL="https://raw.githubusercontent.com/xiaochengshiguduo/getout/main/getout.sh"
 export DEBIAN_FRONTEND=noninteractive
@@ -64,7 +64,7 @@ extract_script_version() {
 
 install_from_update_url() {
   local mode="${1:-install}" tmp version download_url
-  tmp="/tmp/getout-${mode}.$$"
+  tmp="$(mktemp)"
   download_url="$UPDATE_URL"
   if [[ "$download_url" == http://* || "$download_url" == https://* ]]; then
     download_url="${download_url}?v=${SCRIPT_VERSION}&t=$(date +%s)"
@@ -107,6 +107,29 @@ ensure_global_command() {
 update_getout() {
   require_root
   install_from_update_url update
+  if service_active getout-tun.service || service_active getout-gost.service; then
+    warn "getout 正在运行。更新已安装，建议执行 getout restart 使服务文件和路由脚本刷新生效。"
+  fi
+}
+
+ensure_conf_dir() {
+  mkdir -p "$CONF_DIR"
+  chmod 700 "$CONF_DIR" 2>/dev/null || true
+}
+
+chmod_private_file() {
+  [ -f "$1" ] && chmod 600 "$1" 2>/dev/null || true
+}
+
+secure_existing_files() {
+  [ -d "$CONF_DIR" ] && chmod 700 "$CONF_DIR" 2>/dev/null || true
+  chmod_private_file "$SERVER_CONF"
+  chmod_private_file "$CLIENT_CONF"
+  chmod_private_file "$TUN_CONF"
+  chmod_private_file "$MODE_FILE"
+  chmod_private_file "$GOST_SERVICE"
+  [ -f "$ROUTES_UP" ] && chmod 700 "$ROUTES_UP" 2>/dev/null || true
+  [ -f "$ROUTES_DOWN" ] && chmod 700 "$ROUTES_DOWN" 2>/dev/null || true
 }
 
 require_root() {
@@ -157,13 +180,22 @@ arch_hev() {
 }
 
 with_dns64_resolv() {
-  local dns="$1" orig rc
+  local dns="$1" orig rc old_trap
   shift
   orig="$(cat /etc/resolv.conf 2>/dev/null || true)"
-  printf 'nameserver %s\noptions timeout:3 attempts:2\n' "$dns" > /etc/resolv.conf || return 1
+  old_trap="$(trap -p RETURN || true)"
+  trap 'printf "%s\n" "$orig" > /etc/resolv.conf 2>/dev/null || true' RETURN
+  if ! printf 'nameserver %s\noptions timeout:3 attempts:2\n' "$dns" > /etc/resolv.conf; then
+    printf '%s\n' "$orig" > /etc/resolv.conf 2>/dev/null || true
+    trap - RETURN
+    [ -n "$old_trap" ] && eval "$old_trap" || true
+    return 1
+  fi
   "$@"
   rc=$?
   printf '%s\n' "$orig" > /etc/resolv.conf || true
+  trap - RETURN
+  [ -n "$old_trap" ] && eval "$old_trap" || true
   return "$rc"
 }
 
@@ -247,6 +279,15 @@ reject_url_unsafe() {
   local name="$1" value="$2"
   [[ "$value" != *[[:space:]]* ]] || fatal "$name 不能包含空白字符。"
   [[ "$value" != *"@"* ]] || fatal "$name 不能包含 @ 字符。"
+  [[ "$value" != *":"* ]] || fatal "$name 不能包含 : 字符。"
+  [[ "$value" != *"/"* ]] || fatal "$name 不能包含 / 字符。"
+  [[ "$value" != *"?"* ]] || fatal "$name 不能包含 ? 字符。"
+  [[ "$value" != *"#"* ]] || fatal "$name 不能包含 # 字符。"
+  [[ "$value" != *"%"* ]] || fatal "$name 不能包含 % 字符。"
+  [[ "$value" != *"&"* ]] || fatal "$name 不能包含 & 字符。"
+  [[ "$value" != *"["* ]] || fatal "$name 不能包含 [ 字符。"
+  [[ "$value" != *"]"* ]] || fatal "$name 不能包含 ] 字符。"
+  [[ "$value" != *"\\"* ]] || fatal "$name 不能包含 \\ 字符。"
 }
 
 ssh_remote_ip() {
@@ -282,7 +323,7 @@ main_ipv6() {
 }
 
 write_routes_scripts() {
-  mkdir -p "$CONF_DIR"
+  ensure_conf_dir
   cat > "$ROUTES_UP" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -302,10 +343,11 @@ RESOLV_ORIG="$CONF_DIR/resolv.conf.orig"
 GAI_ORIG="$CONF_DIR/gai.conf.orig"
 
 run() { "$@" 2>/dev/null || true; }
+run_all() { while "$@" 2>/dev/null; do :; done; }
 is_ipv6() { [[ "${1:-}" == *:* ]]; }
 is_ipv4() { [[ "${1:-}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; }
-add4_to_main() { [ -n "${1:-}" ] && run ip rule add to "$1" lookup main pref "$2"; }
-add6_to_main() { [ -n "${1:-}" ] && run ip -6 rule add to "$1" lookup main pref "$2"; }
+add4_to_main() { [ -n "${1:-}" ] && run_all ip rule del to "$1" lookup main pref "$2" && run ip rule add to "$1" lookup main pref "$2"; }
+add6_to_main() { [ -n "${1:-}" ] && run_all ip -6 rule del to "$1" lookup main pref "$2" && run ip -6 rule add to "$1" lookup main pref "$2"; }
 ssh_listen_ports() {
   {
     if [ -n "${SSH_CONNECTION:-}" ]; then
@@ -329,6 +371,8 @@ add_ssh_port_rules() {
   local port
   for port in $(ssh_ports_text); do
     [[ "$port" =~ ^[0-9]+$ ]] || continue
+    run_all ip rule del ipproto tcp sport "$port" lookup main pref 6
+    run_all ip -6 rule del ipproto tcp sport "$port" lookup main pref 6
     run ip rule add ipproto tcp sport "$port" lookup main pref 6
     run ip -6 rule add ipproto tcp sport "$port" lookup main pref 6
   done
@@ -350,14 +394,16 @@ apply_runtime_dns() {
 }
 
 apply_gai_priority() {
+  local tmp
+  tmp="$(mktemp)" || return 0
   [ -f "$GAI_ORIG" ] || cat /etc/gai.conf > "$GAI_ORIG" 2>/dev/null || true
   awk '
     $0 == "# getout managed priority begin" {skip=1; next}
     $0 == "# getout managed priority end" {skip=0; next}
     !skip {print}
-  ' /etc/gai.conf 2>/dev/null > /tmp/getout-gai.$$ || true
+  ' /etc/gai.conf 2>/dev/null > "$tmp" || true
   {
-    cat /tmp/getout-gai.$$ 2>/dev/null || true
+    cat "$tmp" 2>/dev/null || true
     printf '\n# getout managed priority begin\n'
     printf 'label ::1/128       0\n'
     printf 'label ::/0          1\n'
@@ -379,7 +425,7 @@ apply_gai_priority() {
     printf 'precedence ::/96         20\n'
     printf '# getout managed priority end\n'
   } > /etc/gai.conf 2>/dev/null || true
-  rm -f /tmp/getout-gai.$$ 2>/dev/null || true
+  rm -f "$tmp" 2>/dev/null || true
 }
 
 "$CONF_DIR/routes-down.sh" >/dev/null 2>&1 || true
@@ -434,10 +480,11 @@ RESOLV_ORIG="$CONF_DIR/resolv.conf.orig"
 GAI_ORIG="$CONF_DIR/gai.conf.orig"
 
 run() { "$@" 2>/dev/null || true; }
+run_all() { while "$@" 2>/dev/null; do :; done; }
 is_ipv6() { [[ "${1:-}" == *:* ]]; }
 is_ipv4() { [[ "${1:-}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; }
-del4_to_main() { [ -n "${1:-}" ] && run ip rule del to "$1" lookup main pref "$2"; }
-del6_to_main() { [ -n "${1:-}" ] && run ip -6 rule del to "$1" lookup main pref "$2"; }
+del4_to_main() { [ -n "${1:-}" ] && run_all ip rule del to "$1" lookup main pref "$2"; }
+del6_to_main() { [ -n "${1:-}" ] && run_all ip -6 rule del to "$1" lookup main pref "$2"; }
 ssh_listen_ports() {
   {
     if [ -n "${SSH_CONNECTION:-}" ]; then
@@ -459,10 +506,12 @@ ssh_ports_text() {
 }
 del_ssh_port_rules() {
   local port
-  for port in $(ssh_ports_text); do
+  for port in $(ssh_ports_text) 22; do
     [[ "$port" =~ ^[0-9]+$ ]] || continue
-    run ip rule del ipproto tcp sport "$port" lookup main pref 6
-    run ip -6 rule del ipproto tcp sport "$port" lookup main pref 6
+    run_all ip rule del ipproto tcp sport "$port" lookup main pref 6
+    run_all ip -6 rule del ipproto tcp sport "$port" lookup main pref 6
+    run_all ip rule del sport "$port" lookup main pref 6
+    run_all ip -6 rule del sport "$port" lookup main pref 6
   done
 }
 restore_dns() {
@@ -478,22 +527,24 @@ restore_gai() {
     cat "$GAI_ORIG" > /etc/gai.conf 2>/dev/null || true
     rm -f "$GAI_ORIG"
   else
+    local tmp
+    tmp="$(mktemp)" || return 0
     awk '
       $0 == "# getout managed priority begin" {skip=1; next}
       $0 == "# getout managed priority end" {skip=0; next}
       !skip {print}
-    ' /etc/gai.conf 2>/dev/null > /tmp/getout-gai.$$ || true
-    cat /tmp/getout-gai.$$ > /etc/gai.conf 2>/dev/null || true
-    rm -f /tmp/getout-gai.$$ 2>/dev/null || true
+    ' /etc/gai.conf 2>/dev/null > "$tmp" || true
+    cat "$tmp" > /etc/gai.conf 2>/dev/null || true
+    rm -f "$tmp" 2>/dev/null || true
   fi
 }
 
 run nft delete table inet "$NFT_TABLE"
-run ip rule del fwmark "$BYPASS_MARK_ID" lookup main pref 9
-run ip -6 rule del fwmark "$BYPASS_MARK_ID" lookup main pref 9
+run_all ip rule del fwmark "$BYPASS_MARK_ID" lookup main pref 9
+run_all ip -6 rule del fwmark "$BYPASS_MARK_ID" lookup main pref 9
 
-run ip rule del fwmark "$MARK_ID" lookup main pref 10
-run ip -6 rule del fwmark "$MARK_ID" lookup main pref 10
+run_all ip rule del fwmark "$MARK_ID" lookup main pref 10
+run_all ip -6 rule del fwmark "$MARK_ID" lookup main pref 10
 
 if is_ipv6 "${SSH_REMOTE_IP:-}"; then del6_to_main "${SSH_REMOTE_IP}/128" 5; elif is_ipv4 "${SSH_REMOTE_IP:-}"; then del4_to_main "${SSH_REMOTE_IP}/32" 5; fi
 if is_ipv6 "${SOCKS_ADDRESS:-}"; then del6_to_main "${SOCKS_ADDRESS}/128" 6; elif is_ipv4 "${SOCKS_ADDRESS:-}"; then del4_to_main "${SOCKS_ADDRESS}/32" 6; fi
@@ -503,14 +554,15 @@ for dns in $RUNTIME_DNS_SERVERS; do if is_ipv6 "$dns"; then del6_to_main "$dns/1
 for cidr in 127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 224.0.0.0/4; do del4_to_main "$cidr" 16; done
 for cidr in ::1/128 fe80::/10 fc00::/7 ff00::/8; do del6_to_main "$cidr" 16; done
 
-run ip rule del lookup "$TABLE_ID" pref 20
-run ip -6 rule del lookup "$TABLE_ID" pref 20
-run ip route del default dev "$TUN_NAME" table "$TABLE_ID"
-run ip -6 route del default dev "$TUN_NAME" table "$TABLE_ID"
+run_all ip rule del lookup "$TABLE_ID" pref 20
+run_all ip -6 rule del lookup "$TABLE_ID" pref 20
+run_all ip route del default dev "$TUN_NAME" table "$TABLE_ID"
+run_all ip -6 route del default dev "$TUN_NAME" table "$TABLE_ID"
 restore_dns
 restore_gai
 EOF
   chmod +x "$ROUTES_UP" "$ROUTES_DOWN"
+  chmod 700 "$ROUTES_UP" "$ROUTES_DOWN" 2>/dev/null || true
 }
 
 service_active() {
@@ -547,7 +599,7 @@ stop_client_keep_config() {
 
 prompt_server_info() {
   require_root; require_debian; install_deps
-  mkdir -p "$CONF_DIR"
+  ensure_conf_dir
   local port user pass yn
   read -rp "请输入入口 SOCKS5 监听端口 [默认: 1080]: " port
   port="${port:-1080}"
@@ -555,21 +607,21 @@ prompt_server_info() {
 
   read -rp "是否设置用户名密码? [Y/n]: " yn
   yn="${yn:-Y}"
+  [[ "$yn" =~ ^[Yy]$ ]] || fatal "入口模式必须设置用户名密码，避免暴露为开放代理。"
   user=""; pass=""
-  if [[ "$yn" =~ ^[Yy]$ ]]; then
-    read -rp "用户名: " user
-    [ -n "$user" ] || fatal "用户名不能为空。"
-    read -rsp "密码: " pass; echo
-    [ -n "$pass" ] || fatal "密码不能为空。"
-    reject_url_unsafe "用户名" "$user"
-    reject_url_unsafe "密码" "$pass"
-  fi
+  read -rp "用户名: " user
+  [ -n "$user" ] || fatal "用户名不能为空。"
+  read -rsp "密码: " pass; echo
+  [ -n "$pass" ] || fatal "密码不能为空。"
+  reject_url_unsafe "用户名" "$user"
+  reject_url_unsafe "密码" "$pass"
 
   {
     printf 'PORT=%s\n' "$(shell_quote "$port")"
     printf 'USERNAME=%s\n' "$(shell_quote "$user")"
     printf 'PASSWORD=%s\n' "$(shell_quote "$pass")"
   } > "$SERVER_CONF"
+  chmod_private_file "$SERVER_CONF"
 }
 
 write_gost_service() {
@@ -578,11 +630,10 @@ write_gost_service() {
   . "$SERVER_CONF"
   local auth listen
   auth=""
-  if [ -n "${USERNAME:-}" ]; then
-    reject_url_unsafe "用户名" "$USERNAME"
-    reject_url_unsafe "密码" "${PASSWORD:-}"
-    auth="${USERNAME}:${PASSWORD}@"
-  fi
+  [ -n "${USERNAME:-}" ] && [ -n "${PASSWORD:-}" ] || fatal "入口模式必须配置用户名密码，请先修改入口信息。"
+  reject_url_unsafe "用户名" "$USERNAME"
+  reject_url_unsafe "密码" "${PASSWORD:-}"
+  auth="${USERNAME}:${PASSWORD}@"
   listen="$(systemd_escape_percent "socks5://${auth}:${PORT}")"
   cat > "$GOST_SERVICE" <<EOF
 [Unit]
@@ -600,17 +651,19 @@ LimitNOFILE=65536
 [Install]
 WantedBy=multi-user.target
 EOF
+  chmod_private_file "$GOST_SERVICE"
   systemctl daemon-reload
 }
 
 start_server() {
   require_root; require_debian; install_deps
-  mkdir -p "$CONF_DIR"
+  ensure_conf_dir
   stop_client_keep_config
   [ -x "$GOST_BIN" ] || download_gost
   [ -f "$SERVER_CONF" ] || prompt_server_info
   write_gost_service
   echo "server" > "$MODE_FILE"
+  chmod_private_file "$MODE_FILE"
   systemctl enable --now getout-gost.service
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
     # shellcheck disable=SC1090
@@ -663,6 +716,20 @@ current_priority_mode() {
   echo "$DEFAULT_PRIORITY_MODE"
 }
 
+warn_ssh_protection_status() {
+  [ -f "$CLIENT_CONF" ] || return 0
+  # shellcheck disable=SC1090
+  . "$CLIENT_CONF"
+  if [ -z "${SSH_REMOTE_IP:-}" ]; then
+    warn "未检测到当前 SSH 来源 IP，仅依赖 SSH 监听端口保护回包。请确认 SSH 端口检测正确后再断开当前连接。"
+  fi
+  if [ -z "${SSH_PORTS:-}" ]; then
+    warn "未检测到 SSH 监听端口，脚本将回退保护 22 端口；如果 SSH 使用非 22 端口，可能有断联风险。"
+  else
+    info "SSH 回包保护端口：${SSH_PORTS}"
+  fi
+}
+
 runtime_dns_servers_text() {
   case "${1:-$(current_priority_mode)}" in
     v4) printf '%s\n' "${RUNTIME_DNS_V4_SERVERS[*]}" ;;
@@ -678,7 +745,7 @@ write_client_conf() {
   v4="$(main_ipv4 || true)"
   v6="$(main_ipv6 || true)"
   runtime_dns="$(runtime_dns_servers_text "$priority_mode")"
-  mkdir -p "$CONF_DIR"
+  ensure_conf_dir
   {
     printf 'MODE=%s\n' "$(shell_quote "$mode")"
     printf 'SOCKS_ADDRESS=%s\n' "$(shell_quote "$address")"
@@ -698,6 +765,7 @@ write_client_conf() {
     printf 'RUNTIME_DNS_SERVERS=%s\n' "$(shell_quote "$runtime_dns")"
     printf 'RUNTIME_DNS_ENABLE=1\n'
   } > "$CLIENT_CONF"
+  chmod_private_file "$CLIENT_CONF"
 }
 
 ask_socks_config() {
@@ -761,6 +829,7 @@ misc:
   log-level: warn
   limit-nofile: 65535
 EOF
+  chmod_private_file "$TUN_CONF"
 }
 
 write_tun_service() {
@@ -791,7 +860,7 @@ EOF
 start_client() {
   local mode="$1"
   require_root; require_debian; install_deps; ensure_tun
-  mkdir -p "$CONF_DIR"
+  ensure_conf_dir
   stop_server_keep_config
   if tun_active; then
     systemctl stop getout-tun.service 2>/dev/null || true
@@ -804,7 +873,9 @@ start_client() {
   write_tun_config
   write_routes_scripts
   echo "$mode" > "$MODE_FILE"
+  chmod_private_file "$MODE_FILE"
   write_tun_service "$mode"
+  warn_ssh_protection_status
   systemctl enable --now getout-tun.service
   sleep 2
   systemctl is-active --quiet getout-tun.service || fatal "getout-tun.service 启动失败，请查看：journalctl -u getout-tun.service -e"
@@ -825,7 +896,7 @@ stop_client() {
 
 configure_client() {
   require_root; require_debian; install_deps; ensure_tun
-  mkdir -p "$CONF_DIR"
+  ensure_conf_dir
   local mode
   if tun_active; then
     mode="$(current_mode)"
@@ -843,9 +914,11 @@ configure_client() {
   write_routes_scripts
   write_tun_service "$mode"
   echo "$mode" > "$MODE_FILE"
+  chmod_private_file "$MODE_FILE"
   if tun_active; then
     systemctl stop getout-tun.service 2>/dev/null || true
     cleanup_rules
+    warn_ssh_protection_status
     systemctl enable --now getout-tun.service
     sleep 2
     systemctl is-active --quiet getout-tun.service || fatal "getout-tun.service 重启失败，请查看：journalctl -u getout-tun.service -e"
@@ -889,6 +962,7 @@ switch_priority_mode() {
   if tun_active; then
     systemctl stop getout-tun.service 2>/dev/null || true
     cleanup_rules
+    warn_ssh_protection_status
     systemctl enable --now getout-tun.service
     sleep 2
     systemctl is-active --quiet getout-tun.service || fatal "getout-tun.service 重启失败，请查看：journalctl -u getout-tun.service -e"
@@ -911,6 +985,12 @@ cleanup_rules() {
 restart_getout() {
   require_root
   if server_active; then
+    ensure_conf_dir
+    [ -f "$SERVER_CONF" ] || fatal "未找到入口配置，请先修改入口信息。"
+    chmod_private_file "$SERVER_CONF"
+    write_gost_service
+    echo "server" > "$MODE_FILE"
+    chmod_private_file "$MODE_FILE"
     systemctl restart getout-gost.service
     systemctl enable getout-gost.service >/dev/null 2>&1 || true
     systemctl disable getout-tun.service >/dev/null 2>&1 || true
@@ -936,6 +1016,7 @@ restart_getout() {
       write_tun_service "$mode"
     fi
     cleanup_rules
+    warn_ssh_protection_status
     systemctl restart getout-tun.service
     systemctl enable getout-tun.service >/dev/null 2>&1 || true
     systemctl disable getout-gost.service >/dev/null 2>&1 || true
@@ -1112,6 +1193,10 @@ main() {
   case "${1:-}" in
     -h|--help|help) ;;
     *) require_root; require_debian ;;
+  esac
+  case "${1:-}" in
+    -h|--help|help) ;;
+    *) secure_existing_files ;;
   esac
   case "${1:-}" in
     uninstall|remove|un|-h|--help|help) ;;
