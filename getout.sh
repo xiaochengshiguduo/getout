@@ -29,6 +29,8 @@ GOST_VERSION="2.11.5"
 HEV_VERSION="2.15.0"
 TABLE_ID="20"
 MARK_ID="438"
+BYPASS_MARK_ID="439"
+NFT_TABLE="getout_protect"
 TUN_NAME="tun0"
 DNS64_SERVERS=(
   "2001:67c:2960::64"
@@ -120,7 +122,7 @@ require_debian() {
 install_deps() {
   local missing=() cmd pkg
   declare -A map=(
-    [curl]=curl [gzip]=gzip [gunzip]=gzip [ip]=iproute2 [ss]=iproute2
+    [curl]=curl [gzip]=gzip [gunzip]=gzip [ip]=iproute2 [ss]=iproute2 [nft]=nftables
     [systemctl]=systemd [sysctl]=procps [awk]=mawk [grep]=grep [sed]=sed
   )
   for cmd in "${!map[@]}"; do
@@ -274,6 +276,8 @@ CONF_DIR="/etc/getout"
 [ -f "$CONF_DIR/client.conf" ] && . "$CONF_DIR/client.conf"
 TABLE_ID="${TABLE_ID:-20}"
 MARK_ID="${MARK_ID:-438}"
+BYPASS_MARK_ID="${BYPASS_MARK_ID:-439}"
+NFT_TABLE="${NFT_TABLE:-getout_protect}"
 TUN_NAME="${TUN_NAME:-tun0}"
 MODE="${MODE:-v4}"
 RUNTIME_DNS_SERVERS="${RUNTIME_DNS_SERVERS:-2001:4860:4860::8888 2606:4700:4700::1111}"
@@ -285,6 +289,16 @@ is_ipv6() { [[ "${1:-}" == *:* ]]; }
 is_ipv4() { [[ "${1:-}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; }
 add4_to_main() { [ -n "${1:-}" ] && run ip rule add to "$1" lookup main pref "$2"; }
 add6_to_main() { [ -n "${1:-}" ] && run ip -6 rule add to "$1" lookup main pref "$2"; }
+add_inbound_protect() {
+  command -v nft >/dev/null 2>&1 || return 0
+  run nft delete table inet "$NFT_TABLE"
+  run nft add table inet "$NFT_TABLE"
+  run nft add chain inet "$NFT_TABLE" prerouting '{ type filter hook prerouting priority -150; policy accept; }'
+  run nft add chain inet "$NFT_TABLE" output '{ type route hook output priority -150; policy accept; }'
+  run nft add rule inet "$NFT_TABLE" prerouting iifname != "$TUN_NAME" ct state new fib daddr type local ct mark set "$BYPASS_MARK_ID"
+  run nft add rule inet "$NFT_TABLE" output ct mark "$BYPASS_MARK_ID" meta mark set "$BYPASS_MARK_ID"
+}
+
 apply_runtime_dns() {
   [ "$RUNTIME_DNS_ENABLE" = "1" ] || return 0
   [ -f "$RESOLV_ORIG" ] || cat /etc/resolv.conf > "$RESOLV_ORIG" 2>/dev/null || true
@@ -293,6 +307,11 @@ apply_runtime_dns() {
 
 "$CONF_DIR/routes-down.sh" >/dev/null 2>&1 || true
 apply_runtime_dns
+
+# 保护外部主动连入本机的连接回包，避免 sing-box/xray/hysteria 等入站服务被出口路由接管。
+add_inbound_protect
+run ip rule add fwmark "$BYPASS_MARK_ID" lookup main pref 9
+run ip -6 rule add fwmark "$BYPASS_MARK_ID" lookup main pref 9
 
 # 避免 tun2socks 访问上游 SOCKS5 时被自己接管。
 run ip rule add fwmark "$MARK_ID" lookup main pref 10
@@ -329,6 +348,8 @@ CONF_DIR="/etc/getout"
 [ -f "$CONF_DIR/client.conf" ] && . "$CONF_DIR/client.conf"
 TABLE_ID="${TABLE_ID:-20}"
 MARK_ID="${MARK_ID:-438}"
+BYPASS_MARK_ID="${BYPASS_MARK_ID:-439}"
+NFT_TABLE="${NFT_TABLE:-getout_protect}"
 TUN_NAME="${TUN_NAME:-tun0}"
 RUNTIME_DNS_SERVERS="${RUNTIME_DNS_SERVERS:-2001:4860:4860::8888 2606:4700:4700::1111}"
 RUNTIME_DNS_ENABLE="${RUNTIME_DNS_ENABLE:-1}"
@@ -346,6 +367,10 @@ restore_dns() {
     rm -f "$RESOLV_ORIG"
   fi
 }
+
+run nft delete table inet "$NFT_TABLE"
+run ip rule del fwmark "$BYPASS_MARK_ID" lookup main pref 9
+run ip -6 rule del fwmark "$BYPASS_MARK_ID" lookup main pref 9
 
 run ip rule del fwmark "$MARK_ID" lookup main pref 10
 run ip -6 rule del fwmark "$MARK_ID" lookup main pref 10
@@ -543,6 +568,8 @@ write_client_conf() {
     printf 'MAIN_IPV6=%s\n' "$(shell_quote "$v6")"
     printf 'TABLE_ID=%s\n' "$(shell_quote "$TABLE_ID")"
     printf 'MARK_ID=%s\n' "$(shell_quote "$MARK_ID")"
+    printf 'BYPASS_MARK_ID=%s\n' "$(shell_quote "$BYPASS_MARK_ID")"
+    printf 'NFT_TABLE=%s\n' "$(shell_quote "$NFT_TABLE")"
     printf 'TUN_NAME=%s\n' "$(shell_quote "$TUN_NAME")"
     printf 'RUNTIME_DNS_SERVERS=%s\n' "$(shell_quote "$runtime_dns")"
     printf 'RUNTIME_DNS_ENABLE=1\n'
