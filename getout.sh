@@ -258,6 +258,20 @@ ssh_remote_ip() {
   fi
 }
 
+ssh_listen_ports() {
+  {
+    if [ -n "${SSH_CONNECTION:-}" ]; then
+      awk '{print $4}' <<<"$SSH_CONNECTION"
+    fi
+    if command -v sshd >/dev/null 2>&1; then
+      sshd -T 2>/dev/null | awk '$1=="port" {print $2}'
+    elif [ -x /usr/sbin/sshd ]; then
+      /usr/sbin/sshd -T 2>/dev/null | awk '$1=="port" {print $2}'
+    fi
+    ss -H -ltnp 2>/dev/null | awk '/sshd/ {n=split($4,a,":"); print a[n]}'
+  } | awk '/^[0-9]+$/ && $1 >= 1 && $1 <= 65535 {seen[$1]=1} END {for (p in seen) print p}' | sort -n
+}
+
 main_ipv4() {
   ip -4 route get 1.1.1.1 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}' || true
 }
@@ -289,6 +303,33 @@ is_ipv6() { [[ "${1:-}" == *:* ]]; }
 is_ipv4() { [[ "${1:-}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; }
 add4_to_main() { [ -n "${1:-}" ] && run ip rule add to "$1" lookup main pref "$2"; }
 add6_to_main() { [ -n "${1:-}" ] && run ip -6 rule add to "$1" lookup main pref "$2"; }
+ssh_listen_ports() {
+  {
+    if [ -n "${SSH_CONNECTION:-}" ]; then
+      awk '{print $4}' <<<"$SSH_CONNECTION"
+    fi
+    if command -v sshd >/dev/null 2>&1; then
+      sshd -T 2>/dev/null | awk '$1=="port" {print $2}'
+    elif [ -x /usr/sbin/sshd ]; then
+      /usr/sbin/sshd -T 2>/dev/null | awk '$1=="port" {print $2}'
+    fi
+    ss -H -ltnp 2>/dev/null | awk '/sshd/ {n=split($4,a,":"); print a[n]}'
+  } | awk '/^[0-9]+$/ && $1 >= 1 && $1 <= 65535 {seen[$1]=1} END {for (p in seen) print p}' | sort -n
+}
+ssh_ports_text() {
+  local ports="${SSH_PORTS:-}"
+  [ -n "$ports" ] || ports="$(ssh_listen_ports | tr '\n' ' ')"
+  [ -n "$ports" ] || ports="22"
+  printf '%s\n' "$ports"
+}
+add_ssh_port_rules() {
+  local port
+  for port in $(ssh_ports_text); do
+    [[ "$port" =~ ^[0-9]+$ ]] || continue
+    run ip rule add ipproto tcp sport "$port" lookup main pref 6
+    run ip -6 rule add ipproto tcp sport "$port" lookup main pref 6
+  done
+}
 add_inbound_protect() {
   command -v nft >/dev/null 2>&1 || return 0
   run nft delete table inet "$NFT_TABLE"
@@ -321,8 +362,7 @@ run ip -6 rule add fwmark "$MARK_ID" lookup main pref 10
 if is_ipv6 "${SSH_REMOTE_IP:-}"; then add6_to_main "${SSH_REMOTE_IP}/128" 5; elif is_ipv4 "${SSH_REMOTE_IP:-}"; then add4_to_main "${SSH_REMOTE_IP}/32" 5; fi
 if is_ipv6 "${SOCKS_ADDRESS:-}"; then add6_to_main "${SOCKS_ADDRESS}/128" 6; elif is_ipv4 "${SOCKS_ADDRESS:-}"; then add4_to_main "${SOCKS_ADDRESS}/32" 6; fi
 # SSH 回包保护（不依赖 SSH_CONNECTION，开机自启也生效）。
-run ip rule add sport 22 lookup main pref 6
-run ip -6 rule add sport 22 lookup main pref 6
+add_ssh_port_rules
 for dns in $RUNTIME_DNS_SERVERS; do if is_ipv6 "$dns"; then add6_to_main "$dns/128" 7; elif is_ipv4 "$dns"; then add4_to_main "$dns/32" 7; fi; done
 
 # 保护本地/内网/链路本地/组播网段。
@@ -360,6 +400,33 @@ is_ipv6() { [[ "${1:-}" == *:* ]]; }
 is_ipv4() { [[ "${1:-}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; }
 del4_to_main() { [ -n "${1:-}" ] && run ip rule del to "$1" lookup main pref "$2"; }
 del6_to_main() { [ -n "${1:-}" ] && run ip -6 rule del to "$1" lookup main pref "$2"; }
+ssh_listen_ports() {
+  {
+    if [ -n "${SSH_CONNECTION:-}" ]; then
+      awk '{print $4}' <<<"$SSH_CONNECTION"
+    fi
+    if command -v sshd >/dev/null 2>&1; then
+      sshd -T 2>/dev/null | awk '$1=="port" {print $2}'
+    elif [ -x /usr/sbin/sshd ]; then
+      /usr/sbin/sshd -T 2>/dev/null | awk '$1=="port" {print $2}'
+    fi
+    ss -H -ltnp 2>/dev/null | awk '/sshd/ {n=split($4,a,":"); print a[n]}'
+  } | awk '/^[0-9]+$/ && $1 >= 1 && $1 <= 65535 {seen[$1]=1} END {for (p in seen) print p}' | sort -n
+}
+ssh_ports_text() {
+  local ports="${SSH_PORTS:-}"
+  [ -n "$ports" ] || ports="$(ssh_listen_ports | tr '\n' ' ')"
+  [ -n "$ports" ] || ports="22"
+  printf '%s\n' "$ports"
+}
+del_ssh_port_rules() {
+  local port
+  for port in $(ssh_ports_text); do
+    [[ "$port" =~ ^[0-9]+$ ]] || continue
+    run ip rule del ipproto tcp sport "$port" lookup main pref 6
+    run ip -6 rule del ipproto tcp sport "$port" lookup main pref 6
+  done
+}
 restore_dns() {
   [ "$RUNTIME_DNS_ENABLE" = "1" ] || return 0
   if [ -f "$RESOLV_ORIG" ]; then
@@ -377,8 +444,7 @@ run ip -6 rule del fwmark "$MARK_ID" lookup main pref 10
 
 if is_ipv6 "${SSH_REMOTE_IP:-}"; then del6_to_main "${SSH_REMOTE_IP}/128" 5; elif is_ipv4 "${SSH_REMOTE_IP:-}"; then del4_to_main "${SSH_REMOTE_IP}/32" 5; fi
 if is_ipv6 "${SOCKS_ADDRESS:-}"; then del6_to_main "${SOCKS_ADDRESS}/128" 6; elif is_ipv4 "${SOCKS_ADDRESS:-}"; then del4_to_main "${SOCKS_ADDRESS}/32" 6; fi
-run ip rule del sport 22 lookup main pref 6
-run ip -6 rule del sport 22 lookup main pref 6
+del_ssh_port_rules
 for dns in $RUNTIME_DNS_SERVERS; do if is_ipv6 "$dns"; then del6_to_main "$dns/128" 7; elif is_ipv4 "$dns"; then del4_to_main "$dns/32" 7; fi; done
 
 for cidr in 127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 224.0.0.0/4; do del4_to_main "$cidr" 16; done
@@ -551,8 +617,9 @@ runtime_dns_servers_text() {
 }
 
 write_client_conf() {
-  local mode="$1" address="$2" port="$3" username="$4" password="$5" ssh_ip v4 v6 runtime_dns
+  local mode="$1" address="$2" port="$3" username="$4" password="$5" ssh_ip ssh_ports v4 v6 runtime_dns
   ssh_ip="$(ssh_remote_ip || true)"
+  ssh_ports="$(ssh_listen_ports | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
   v4="$(main_ipv4 || true)"
   v6="$(main_ipv6 || true)"
   runtime_dns="$(runtime_dns_servers_text)"
@@ -564,6 +631,7 @@ write_client_conf() {
     printf 'SOCKS_USERNAME=%s\n' "$(shell_quote "$username")"
     printf 'SOCKS_PASSWORD=%s\n' "$(shell_quote "$password")"
     printf 'SSH_REMOTE_IP=%s\n' "$(shell_quote "$ssh_ip")"
+    printf 'SSH_PORTS=%s\n' "$(shell_quote "$ssh_ports")"
     printf 'MAIN_IPV4=%s\n' "$(shell_quote "$v4")"
     printf 'MAIN_IPV6=%s\n' "$(shell_quote "$v6")"
     printf 'TABLE_ID=%s\n' "$(shell_quote "$TABLE_ID")"
