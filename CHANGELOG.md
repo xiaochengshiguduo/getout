@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.8
+
+- 运行期 DNS 备份/恢复增加 symlink 元数据、目标文件备份和 checksum 标记，避免破坏 resolver manager 管理的 `/etc/resolv.conf`。
+- `/etc/resolv.conf` 和 `/etc/gai.conf` 在 getout 运行期间被外部修改时，不再强行恢复旧备份；旧备份会归档为 conflict 文件，后续启动重新备份当前状态。
+- `/etc/gai.conf` 恢复增加 checksum 保护，降低覆盖管理员并发修改的风险。
+- 出口模式 preflight 增加临时 nftables 表和规则创建测试，提前发现内核/nft 规则兼容性问题。
+- 修改出口、切换 V4/V6 优先、重启出口模式增加运行文件快照和启动失败回滚。
+- 新生成的 `getout-tun.service` 立即设置为 root-only 权限，并保持重启时的优先模式不被重置。
+
 ## 0.1.7
 
 - 改进运行期 DNS 和 `/etc/gai.conf` 的备份/恢复保护，增加 getout 管理标记；原始备份缺失时不再盲目覆盖未知 DNS。

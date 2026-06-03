@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.1.7"
+SCRIPT_VERSION="0.1.8"
 INSTALL_PATH="/usr/local/bin/getout"
 UPDATE_URL="https://raw.githubusercontent.com/xiaochengshiguduo/getout/main/getout.sh"
 export DEBIAN_FRONTEND=noninteractive
@@ -23,6 +23,12 @@ RESOLV_ORIG="$CONF_DIR/resolv.conf.orig"
 GAI_ORIG="$CONF_DIR/gai.conf.orig"
 RESOLV_MARKER="$CONF_DIR/resolv.conf.getout"
 GAI_MARKER="$CONF_DIR/gai.conf.getout"
+RESOLV_META="$CONF_DIR/resolv.conf.meta"
+RESOLV_TARGET_ORIG="$CONF_DIR/resolv.conf.target.orig"
+GAI_META="$CONF_DIR/gai.conf.meta"
+RESOLV_META="$CONF_DIR/resolv.conf.meta"
+RESOLV_TARGET_ORIG="$CONF_DIR/resolv.conf.target.orig"
+GAI_META="$CONF_DIR/gai.conf.meta"
 
 GOST_BIN="/usr/local/bin/getout-gost"
 TUN_BIN="/usr/local/bin/getout-tun2socks"
@@ -140,6 +146,112 @@ assert_private_config() {
   fi
 }
 
+file_checksum() {
+  [ -e "$1" ] || { echo missing; return 0; }
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" 2>/dev/null | awk '{print $1}' || echo unknown
+  else
+    cksum "$1" 2>/dev/null | awk '{print $1":"$2}' || echo unknown
+  fi
+}
+
+write_file_meta() {
+  local path="$1" meta="$2" backup="$3" exists target checksum
+  exists=0; [ -e "$path" ] && exists=1
+  target=""
+  [ -L "$path" ] && target="$(readlink "$path" 2>/dev/null || true)"
+  checksum="$(file_checksum "$path")"
+  {
+    printf 'EXISTS=%s\n' "$(shell_quote "$exists")"
+    printf 'SYMLINK_TARGET=%s\n' "$(shell_quote "$target")"
+    printf 'CHECKSUM=%s\n' "$(shell_quote "$checksum")"
+    if [ -e "$backup" ]; then
+      printf 'BACKUP_CHECKSUM=%s\n' "$(shell_quote "$(file_checksum "$backup")")"
+    else
+      printf 'BACKUP_CHECKSUM=%s\n' "$(shell_quote missing)"
+    fi
+  } > "$meta"
+  chmod_private_file "$meta"
+}
+
+backup_path_preserve_symlink() {
+  local path="$1" backup="$2" meta="$3" target_backup="${4:-}"
+  [ -f "$backup" ] && return 0
+  write_file_meta "$path" "$meta" "$backup"
+  if [ -L "$path" ]; then
+    cp -a "$path" "$backup" 2>/dev/null || true
+    [ -n "$target_backup" ] && cp -a "$(readlink -f "$path" 2>/dev/null || echo "$path")" "$target_backup" 2>/dev/null || true
+  elif [ -e "$path" ]; then
+    cp -a "$path" "$backup" 2>/dev/null || true
+  else
+    : > "$backup" 2>/dev/null || true
+  fi
+  chmod_private_file "$backup"
+  [ -n "$target_backup" ] && chmod_private_file "$target_backup"
+  write_file_meta "$path" "$meta" "$backup"
+}
+
+restore_path_from_backup() {
+  local path="$1" backup="$2" meta="$3" marker="$4" label="$5" target_backup="${6:-}"
+  local exists="1" symlink_target="" backup_checksum="" current_checksum marker_checksum
+  [ -f "$meta" ] && { # shellcheck disable=SC1090
+    . "$meta"; exists="${EXISTS:-1}"; symlink_target="${SYMLINK_TARGET:-}"; backup_checksum="${BACKUP_CHECKSUM:-}"; }
+  if [ ! -e "$backup" ]; then
+    [ -f "$marker" ] && warn "$label 原始备份缺失，已保留当前内容，避免误恢复到未知状态。"
+    return 0
+  fi
+  current_checksum="$(file_checksum "$path")"
+  if [ -f "$marker" ]; then
+    marker_checksum="$(cat "$marker" 2>/dev/null || true)"
+    if [ -n "$marker_checksum" ] && [ "$marker_checksum" != "$current_checksum" ]; then
+      warn "$label 在 getout 运行期间被外部修改，已保留当前内容；旧备份已归档，后续启动会重新备份当前状态。"
+      mv -f "$backup" "$backup.conflict.$(date +%s)" 2>/dev/null || true
+      [ -n "$target_backup" ] && mv -f "$target_backup" "$target_backup.conflict.$(date +%s)" 2>/dev/null || true
+      rm -f "$meta" "$marker" 2>/dev/null || true
+      return 0
+    fi
+  fi
+  if [ "$exists" = "0" ]; then
+    rm -f "$path" 2>/dev/null || true
+  elif [ -n "$symlink_target" ]; then
+    rm -f "$path" 2>/dev/null || true
+    ln -s "$symlink_target" "$path" 2>/dev/null || cp -a "$backup" "$path" 2>/dev/null || true
+    if [ -n "$target_backup" ] && [ -e "$target_backup" ]; then
+      cp -a "$target_backup" "$(readlink -f "$path" 2>/dev/null || echo "$path")" 2>/dev/null || true
+    fi
+  else
+    cp -a "$backup" "$path" 2>/dev/null || true
+  fi
+  rm -f "$backup" "$meta" "$marker" "$target_backup" 2>/dev/null || true
+}
+
+snapshot_runtime_files() {
+  local dir
+  dir="$(mktemp -d)" || fatal "创建回滚快照失败。"
+  for file in "$CLIENT_CONF" "$TUN_CONF" "$ROUTES_UP" "$ROUTES_DOWN" "$TUN_SERVICE" "$MODE_FILE"; do
+    if [ -e "$file" ]; then
+      cp -a "$file" "$dir/$(basename "$file")" 2>/dev/null || true
+    fi
+  done
+  echo "$dir"
+}
+
+restore_runtime_files() {
+  local dir="$1" file base
+  [ -d "$dir" ] || return 0
+  for file in "$CLIENT_CONF" "$TUN_CONF" "$ROUTES_UP" "$ROUTES_DOWN" "$TUN_SERVICE" "$MODE_FILE"; do
+    base="$(basename "$file")"
+    if [ -e "$dir/$base" ]; then
+      cp -a "$dir/$base" "$file" 2>/dev/null || true
+    fi
+  done
+  systemctl daemon-reload 2>/dev/null || true
+}
+
+remove_runtime_snapshot() {
+  [ -n "${1:-}" ] && rm -rf "$1" 2>/dev/null || true
+}
+
 secure_existing_files() {
   [ -d "$CONF_DIR" ] && chmod 700 "$CONF_DIR" 2>/dev/null || true
   chmod_private_file "$SERVER_CONF"
@@ -147,6 +259,7 @@ secure_existing_files() {
   chmod_private_file "$TUN_CONF"
   chmod_private_file "$MODE_FILE"
   chmod_private_file "$GOST_SERVICE"
+  chmod_private_file "$TUN_SERVICE"
   [ -f "$ROUTES_UP" ] && chmod 700 "$ROUTES_UP" 2>/dev/null || true
   [ -f "$ROUTES_DOWN" ] && chmod 700 "$ROUTES_DOWN" 2>/dev/null || true
 }
@@ -411,6 +524,36 @@ preflight_tun_runtime() {
   bash -n "$ROUTES_UP" || fatal "routes-up.sh 语法校验失败。"
   bash -n "$ROUTES_DOWN" || fatal "routes-down.sh 语法校验失败。"
   command -v nft >/dev/null 2>&1 || fatal "未找到 nft，无法启用外部入站连接回包保护。"
+  nft delete table inet getout_preflight 2>/dev/null || true
+  nft add table inet getout_preflight >/dev/null 2>&1 || fatal "nftables 预检失败：无法创建 inet table。"
+  nft add chain inet getout_preflight prerouting '{ type filter hook prerouting priority -150; policy accept; }' >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; fatal "nftables 预检失败：当前内核不支持所需 prerouting 规则。"; }
+  nft add chain inet getout_preflight output '{ type route hook output priority -150; policy accept; }' >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; fatal "nftables 预检失败：当前内核不支持所需 output route hook。"; }
+  nft add rule inet getout_preflight prerouting iifname != "$TUN_NAME" ct state new fib daddr type local ct mark set "$BYPASS_MARK_ID" >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; fatal "nftables 预检失败：当前内核不支持 conntrack/fib 标记规则。"; }
+  nft add rule inet getout_preflight output ct mark "$BYPASS_MARK_ID" meta mark set "$BYPASS_MARK_ID" >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; fatal "nftables 预检失败：当前内核不支持 ct mark 输出规则。"; }
+  nft delete table inet getout_preflight 2>/dev/null || true
+}
+
+restore_runtime_or_warn() {
+  local snapshot="$1"
+  restore_runtime_files "$snapshot"
+  remove_runtime_snapshot "$snapshot"
+  warn "启动失败，已尝试恢复旧配置和旧 systemd 文件。"
+}
+
+restart_tun_with_rollback() {
+  local snapshot="$1" action="${2:-restart}"
+  if [ "$action" = "enable" ]; then
+    systemctl enable --now getout-tun.service
+  else
+    systemctl restart getout-tun.service
+  fi
+  sleep 2
+  if ! systemctl is-active --quiet getout-tun.service; then
+    restore_runtime_or_warn "$snapshot"
+    systemctl restart getout-tun.service 2>/dev/null || true
+    fatal "getout-tun.service 启动失败，请查看：journalctl -u getout-tun.service -e"
+  fi
+  remove_runtime_snapshot "$snapshot"
 }
 
 write_routes_scripts() {
@@ -442,9 +585,44 @@ RESOLV_ORIG="$CONF_DIR/resolv.conf.orig"
 GAI_ORIG="$CONF_DIR/gai.conf.orig"
 RESOLV_MARKER="$CONF_DIR/resolv.conf.getout"
 GAI_MARKER="$CONF_DIR/gai.conf.getout"
+RESOLV_META="$CONF_DIR/resolv.conf.meta"
+RESOLV_TARGET_ORIG="$CONF_DIR/resolv.conf.target.orig"
+GAI_META="$CONF_DIR/gai.conf.meta"
 
 run() { "$@" 2>/dev/null || true; }
 run_all() { while "$@" 2>/dev/null; do :; done; }
+file_checksum() { [ -e "$1" ] || { echo missing; return 0; }; if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" 2>/dev/null | awk '{print $1}' || echo unknown; else cksum "$1" 2>/dev/null | awk '{print $1":"$2}' || echo unknown; fi; }
+write_meta() {
+  local path="$1" meta="$2" backup="$3" exists target
+  exists=0; [ -e "$path" ] && exists=1
+  target=""; [ -L "$path" ] && target="$(readlink "$path" 2>/dev/null || true)"
+  { printf 'EXISTS=%q\n' "$exists"; printf 'SYMLINK_TARGET=%q\n' "$target"; printf 'CHECKSUM=%q\n' "$(file_checksum "$path")"; printf 'BACKUP_CHECKSUM=%q\n' "$(file_checksum "$backup")"; } > "$meta" 2>/dev/null || true
+}
+backup_path() {
+  local path="$1" backup="$2" meta="$3" target_backup="${4:-}"
+  [ -f "$backup" ] && return 0
+  write_meta "$path" "$meta" "$backup"
+  if [ -L "$path" ]; then
+    cp -a "$path" "$backup" 2>/dev/null || true
+    [ -n "$target_backup" ] && cp -a "$(readlink -f "$path" 2>/dev/null || echo "$path")" "$target_backup" 2>/dev/null || true
+  elif [ -e "$path" ]; then
+    cp -a "$path" "$backup" 2>/dev/null || true
+  else
+    : > "$backup" 2>/dev/null || true
+  fi
+  write_meta "$path" "$meta" "$backup"
+}
+restore_path() {
+  local path="$1" backup="$2" meta="$3" marker="$4" label="$5" target_backup="${6:-}" exists=1 symlink_target="" marker_checksum current_checksum
+  [ -f "$meta" ] && . "$meta" && exists="${EXISTS:-1}" && symlink_target="${SYMLINK_TARGET:-}"
+  if [ ! -e "$backup" ]; then [ -f "$marker" ] && echo "[警告] $label 原始备份缺失，已保留当前内容，避免误恢复到未知状态。" >&2; return 0; fi
+  current_checksum="$(file_checksum "$path")"; marker_checksum="$(cat "$marker" 2>/dev/null || true)"
+  if [ -n "$marker_checksum" ] && [ "$marker_checksum" != "$current_checksum" ]; then echo "[警告] $label 在 getout 运行期间被外部修改，已保留当前内容；旧备份已归档，后续启动会重新备份当前状态。" >&2; mv -f "$backup" "$backup.conflict.$(date +%s)" 2>/dev/null || true; [ -n "$target_backup" ] && mv -f "$target_backup" "$target_backup.conflict.$(date +%s)" 2>/dev/null || true; rm -f "$meta" "$marker" 2>/dev/null || true; return 0; fi
+  if [ "$exists" = "0" ]; then rm -f "$path" 2>/dev/null || true
+  elif [ -n "$symlink_target" ]; then rm -f "$path" 2>/dev/null || true; ln -s "$symlink_target" "$path" 2>/dev/null || cp -a "$backup" "$path" 2>/dev/null || true; [ -n "$target_backup" ] && [ -e "$target_backup" ] && cp -a "$target_backup" "$(readlink -f "$path" 2>/dev/null || echo "$path")" 2>/dev/null || true
+  else cp -a "$backup" "$path" 2>/dev/null || true; fi
+  rm -f "$backup" "$meta" "$marker" "$target_backup" 2>/dev/null || true
+}
 is_ipv6() { [[ "${1:-}" == *:* ]]; }
 is_ipv4() { [[ "${1:-}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; }
 add4_to_main() { [ -n "${1:-}" ] && run_all ip rule del to "$1" lookup main pref "$2" && run ip rule add to "$1" lookup main pref "$2"; }
@@ -494,11 +672,8 @@ add_inbound_protect() {
 apply_runtime_dns() {
   [ "$RUNTIME_DNS_ENABLE" = "1" ] || return 0
   if [ ! -f "$RESOLV_ORIG" ]; then
-    if [ -f "$RESOLV_MARKER" ]; then
-      echo "[警告] 检测到 /etc/resolv.conf 可能已由 getout 管理，但原始备份缺失；为避免错误覆盖原始 DNS，本次不重建备份。" >&2
-    else
-      cat /etc/resolv.conf > "$RESOLV_ORIG" 2>/dev/null || true
-    fi
+    if [ -f "$RESOLV_MARKER" ]; then echo "[警告] 检测到 /etc/resolv.conf 可能已由 getout 管理，但原始备份缺失；为避免错误覆盖原始 DNS，本次不重建备份。" >&2
+    else backup_path /etc/resolv.conf "$RESOLV_ORIG" "$RESOLV_META" "$RESOLV_TARGET_ORIG"; fi
   fi
   {
     printf '# getout managed resolv begin\n'
@@ -506,7 +681,7 @@ apply_runtime_dns() {
     printf 'options timeout:2 attempts:1\n'
     printf '# getout managed resolv end\n'
   } > /etc/resolv.conf 2>/dev/null || { echo "[错误] 写入 /etc/resolv.conf 失败。" >&2; return 1; }
-  : > "$RESOLV_MARKER" 2>/dev/null || true
+  file_checksum /etc/resolv.conf > "$RESOLV_MARKER" 2>/dev/null || true
 }
 
 apply_gai_priority() {
@@ -516,7 +691,7 @@ apply_gai_priority() {
     if [ -f "$GAI_MARKER" ]; then
       echo "[警告] 检测到 /etc/gai.conf 可能已由 getout 管理，但原始备份缺失；本次只更新 getout 管理块。" >&2
     else
-      cat /etc/gai.conf > "$GAI_ORIG" 2>/dev/null || true
+      backup_path /etc/gai.conf "$GAI_ORIG" "$GAI_META"
     fi
   fi
   awk '
@@ -547,7 +722,7 @@ apply_gai_priority() {
     printf 'precedence ::/96         20\n'
     printf '# getout managed priority end\n'
   } > /etc/gai.conf 2>/dev/null || true
-  : > "$GAI_MARKER" 2>/dev/null || true
+  file_checksum /etc/gai.conf > "$GAI_MARKER" 2>/dev/null || true
   rm -f "$tmp" 2>/dev/null || true
 }
 
@@ -614,9 +789,24 @@ RESOLV_ORIG="$CONF_DIR/resolv.conf.orig"
 GAI_ORIG="$CONF_DIR/gai.conf.orig"
 RESOLV_MARKER="$CONF_DIR/resolv.conf.getout"
 GAI_MARKER="$CONF_DIR/gai.conf.getout"
+RESOLV_META="$CONF_DIR/resolv.conf.meta"
+RESOLV_TARGET_ORIG="$CONF_DIR/resolv.conf.target.orig"
+GAI_META="$CONF_DIR/gai.conf.meta"
 
 run() { "$@" 2>/dev/null || true; }
 run_all() { while "$@" 2>/dev/null; do :; done; }
+file_checksum() { [ -e "$1" ] || { echo missing; return 0; }; if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" 2>/dev/null | awk '{print $1}' || echo unknown; else cksum "$1" 2>/dev/null | awk '{print $1":"$2}' || echo unknown; fi; }
+restore_path() {
+  local path="$1" backup="$2" meta="$3" marker="$4" label="$5" target_backup="${6:-}" exists=1 symlink_target="" marker_checksum current_checksum
+  [ -f "$meta" ] && . "$meta" && exists="${EXISTS:-1}" && symlink_target="${SYMLINK_TARGET:-}"
+  if [ ! -e "$backup" ]; then [ -f "$marker" ] && echo "[警告] $label 原始备份缺失，已保留当前内容，避免误恢复到未知状态。" >&2; return 0; fi
+  current_checksum="$(file_checksum "$path")"; marker_checksum="$(cat "$marker" 2>/dev/null || true)"
+  if [ -n "$marker_checksum" ] && [ "$marker_checksum" != "$current_checksum" ]; then echo "[警告] $label 在 getout 运行期间被外部修改，已保留当前内容；旧备份已归档，后续启动会重新备份当前状态。" >&2; mv -f "$backup" "$backup.conflict.$(date +%s)" 2>/dev/null || true; [ -n "$target_backup" ] && mv -f "$target_backup" "$target_backup.conflict.$(date +%s)" 2>/dev/null || true; rm -f "$meta" "$marker" 2>/dev/null || true; return 0; fi
+  if [ "$exists" = "0" ]; then rm -f "$path" 2>/dev/null || true
+  elif [ -n "$symlink_target" ]; then rm -f "$path" 2>/dev/null || true; ln -s "$symlink_target" "$path" 2>/dev/null || cp -a "$backup" "$path" 2>/dev/null || true; [ -n "$target_backup" ] && [ -e "$target_backup" ] && cp -a "$target_backup" "$(readlink -f "$path" 2>/dev/null || echo "$path")" 2>/dev/null || true
+  else cp -a "$backup" "$path" 2>/dev/null || true; fi
+  rm -f "$backup" "$meta" "$marker" "$target_backup" 2>/dev/null || true
+}
 is_ipv6() { [[ "${1:-}" == *:* ]]; }
 is_ipv4() { [[ "${1:-}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; }
 del4_to_main() { [ -n "${1:-}" ] && run_all ip rule del to "$1" lookup main pref "$2"; }
@@ -654,21 +844,13 @@ del_ssh_port_rules() {
 }
 restore_dns() {
   [ "$RUNTIME_DNS_ENABLE" = "1" ] || return 0
-  if [ -f "$RESOLV_ORIG" ]; then
-    cat "$RESOLV_ORIG" > /etc/resolv.conf 2>/dev/null || true
-    rm -f "$RESOLV_ORIG"
-    rm -f "$RESOLV_MARKER" 2>/dev/null || true
-  elif [ -f "$RESOLV_MARKER" ]; then
-    echo "[警告] /etc/resolv.conf 原始备份缺失，已保留当前 DNS，避免误恢复到未知内容。" >&2
-  fi
+  restore_path /etc/resolv.conf "$RESOLV_ORIG" "$RESOLV_META" "$RESOLV_MARKER" /etc/resolv.conf "$RESOLV_TARGET_ORIG"
 }
 
 restore_gai() {
   if [ -f "$GAI_ORIG" ]; then
-    cat "$GAI_ORIG" > /etc/gai.conf 2>/dev/null || true
-    rm -f "$GAI_ORIG"
-    rm -f "$GAI_MARKER" 2>/dev/null || true
-  else
+    restore_path /etc/gai.conf "$GAI_ORIG" "$GAI_META" "$GAI_MARKER" /etc/gai.conf
+  elif [ -f "$GAI_MARKER" ]; then
     local tmp
     tmp="$(mktemp)" || return 0
     awk '
@@ -1003,13 +1185,16 @@ LimitNOFILE=65536
 [Install]
 WantedBy=multi-user.target
 EOF
+  chmod_private_file "$TUN_SERVICE"
   systemctl daemon-reload
 }
 
 start_client() {
   local mode="$1"
+  local snapshot
   require_root; require_debian; install_deps; ensure_tun
   ensure_conf_dir
+  snapshot="$(snapshot_runtime_files)"
   stop_server_keep_config
   if tun_active; then
     systemctl stop getout-tun.service 2>/dev/null || true
@@ -1026,9 +1211,7 @@ start_client() {
   chmod_private_file "$MODE_FILE"
   write_tun_service "$mode"
   warn_ssh_protection_status
-  systemctl enable --now getout-tun.service
-  sleep 2
-  systemctl is-active --quiet getout-tun.service || fatal "getout-tun.service 启动失败，请查看：journalctl -u getout-tun.service -e"
+  restart_tun_with_rollback "$snapshot" enable
   success "${mode} 模式已启动。"
   status
 }
@@ -1047,7 +1230,9 @@ stop_client() {
 configure_client() {
   require_root; require_debian; install_deps; ensure_tun
   ensure_conf_dir
-  local mode
+  local mode snapshot was_active
+  was_active=0; tun_active && was_active=1
+  snapshot="$(snapshot_runtime_files)"
   if tun_active; then
     mode="$(current_mode)"
     [ "$mode" = "v4" ] || [ "$mode" = "dual" ] || mode="v4"
@@ -1067,16 +1252,15 @@ configure_client() {
   preflight_tun_runtime
   echo "$mode" > "$MODE_FILE"
   chmod_private_file "$MODE_FILE"
-  if tun_active; then
+  if [ "$was_active" = "1" ]; then
     systemctl stop getout-tun.service 2>/dev/null || true
     cleanup_rules
     warn_ssh_protection_status
-    systemctl enable --now getout-tun.service
-    sleep 2
-    systemctl is-active --quiet getout-tun.service || fatal "getout-tun.service 重启失败，请查看：journalctl -u getout-tun.service -e"
+    restart_tun_with_rollback "$snapshot" enable
     success "出口信息已更新并立即应用。"
     status
   else
+    remove_runtime_snapshot "$snapshot"
     success "出口信息已保存，启动 V4/双栈模式后生效。"
     if server_active; then
       warn "当前入口模式正在运行，出口信息不会影响当前入口模式。"
@@ -1094,7 +1278,9 @@ priority_action_label() {
 switch_priority_mode() {
   require_root; require_debian; install_deps
   [ -f "$CLIENT_CONF" ] || fatal "未找到出口配置，请先修改出口信息。"
-  local mode address port username password priority_mode
+  local mode address port username password priority_mode snapshot was_active
+  was_active=0; tun_active && was_active=1
+  snapshot="$(snapshot_runtime_files)"
   assert_private_config "$CLIENT_CONF"
   # shellcheck disable=SC1090
   . "$CLIENT_CONF"
@@ -1113,13 +1299,13 @@ switch_priority_mode() {
   write_routes_scripts
   write_tun_service "$mode"
   preflight_tun_runtime
-  if tun_active; then
+  if [ "$was_active" = "1" ]; then
     systemctl stop getout-tun.service 2>/dev/null || true
     cleanup_rules
     warn_ssh_protection_status
-    systemctl enable --now getout-tun.service
-    sleep 2
-    systemctl is-active --quiet getout-tun.service || fatal "getout-tun.service 重启失败，请查看：journalctl -u getout-tun.service -e"
+    restart_tun_with_rollback "$snapshot" enable
+  else
+    remove_runtime_snapshot "$snapshot"
   fi
   case "$priority_mode" in
     v4) success "已切换至 V4 优先模式。" ;;
@@ -1155,7 +1341,8 @@ restart_getout() {
     success "入口模式已重启。"
     status
   elif tun_active; then
-    local mode address port username password
+    local mode address port username password priority_mode snapshot
+    snapshot="$(snapshot_runtime_files)"
     mode="$(current_mode)"
     [ "$mode" = "v4" ] || [ "$mode" = "dual" ] || mode="v4"
     if [ -f "$CLIENT_CONF" ]; then
@@ -1166,8 +1353,9 @@ restart_getout() {
       port="${SOCKS_PORT:-}"
       username="${SOCKS_USERNAME:-}"
       password="${SOCKS_PASSWORD:-}"
+      priority_mode="${PRIORITY_MODE:-$(current_priority_mode)}"
       [ -n "$address" ] && [ -n "$port" ] || fatal "出口配置不完整，请先修改出口信息。"
-      write_client_conf "$mode" "$address" "$port" "$username" "$password"
+      write_client_conf "$mode" "$address" "$port" "$username" "$password" "$priority_mode"
       write_tun_config
       write_routes_scripts
       write_tun_service "$mode"
@@ -1175,11 +1363,9 @@ restart_getout() {
     fi
     cleanup_rules
     warn_ssh_protection_status
-    systemctl restart getout-tun.service
+    restart_tun_with_rollback "$snapshot" restart
     systemctl enable getout-tun.service >/dev/null 2>&1 || true
     systemctl disable getout-gost.service >/dev/null 2>&1 || true
-    sleep 2
-    systemctl is-active --quiet getout-tun.service || fatal "getout-tun.service 重启失败，请查看：journalctl -u getout-tun.service -e"
     success "出口模式已重启。"
     status
   else

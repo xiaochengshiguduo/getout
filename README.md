@@ -140,7 +140,7 @@ V6 优先模式会：
 
 下载二进制时会先尝试常规下载，失败后再使用 DNS64 兜底，以兼容 IPv4、IPv6 和双栈环境。
 
-停止出口模式或卸载时会恢复原始 DNS 和 `/etc/gai.conf`。如果检测到原始 DNS 备份缺失，`getout` 会保留当前 DNS 并给出警告，避免盲目恢复到未知内容。
+停止出口模式或卸载时会恢复原始 DNS 和 `/etc/gai.conf`。`getout` 会记录符号链接、目标文件和 checksum 信息；如果检测到原始备份缺失或运行期间文件被外部修改，会保留当前内容并给出警告，避免盲目恢复到未知内容。
 
 `/etc/gai.conf` 影响的是 glibc 地址选择；部分 Go、Rust、Node 或静态链接程序可能使用自己的解析和地址排序逻辑。
 
@@ -167,8 +167,11 @@ V6 优先模式会：
 /etc/getout/routes-down.sh
 /etc/getout/resolv.conf.orig
 /etc/getout/resolv.conf.getout
+/etc/getout/resolv.conf.meta
+/etc/getout/resolv.conf.target.orig
 /etc/getout/gai.conf.orig
 /etc/getout/gai.conf.getout
+/etc/getout/gai.conf.meta
 /usr/local/bin/getout
 /usr/local/bin/getout-gost
 /usr/local/bin/getout-tun2socks
@@ -210,6 +213,7 @@ getout uninstall
 - 清理路由规则；
 - 恢复 DNS 和 `/etc/gai.conf`；
 - 即使生成的 `routes-down.sh` 缺失或损坏，也会尝试兜底清理 getout 相关路由规则、table 20 默认路由和 nft 表；
+- 修改出口、切换 V4/V6 优先、重启出口模式时会先保存运行文件快照，启动失败会尝试恢复旧配置和旧 systemd 文件；
 - 禁用 systemd 自启动；
 - 删除配置、全局命令、二进制和 systemd unit。
 
@@ -218,7 +222,8 @@ getout uninstall
 - 仅支持 Debian。
 - 脚本会在常规下载失败后临时修改 `/etc/resolv.conf` 使用 DNS64，DNS64 下载结束后恢复。
 - 出口模式运行时会临时修改 `/etc/resolv.conf` 和 `/etc/gai.conf`，停止或卸载时恢复。
-- `/etc/resolv.conf` 和 `/etc/gai.conf` 的恢复依赖首次接管前保存的原始备份；如果备份缺失，脚本会警告并避免盲目覆盖未知 DNS。
+- `/etc/resolv.conf` 和 `/etc/gai.conf` 的恢复依赖首次接管前保存的原始备份和 checksum；如果备份缺失或运行期间被外部修改，脚本会警告并避免盲目覆盖当前内容。
+- 出口模式启动前会创建临时 nftables 表做兼容性预检，预检失败不会继续启动。
 - `/etc/getout` 会设置为私有目录，配置文件包含代理账号密码。
 - 脚本在读取配置文件前会校验配置由 root 拥有，且 group/other 不可写。
 - 入口模式必须设置用户名密码；用户名和密码不能包含空白字符或 URL 保留字符。
