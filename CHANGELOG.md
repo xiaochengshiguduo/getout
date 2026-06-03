@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.9
+
+- 修复出口模式 preflight 失败时不会恢复刚写入运行文件的问题，启动、修改出口、切换优先级和重启出口模式都会先回滚旧配置再退出。
+- 运行文件快照现在会记录快照前不存在的文件，回滚时删除预检前新生成的 `tun2socks.yaml`、路由脚本、systemd 文件和模式文件，避免失败后留下半写入状态。
+- 清理重复的 resolver 元数据常量定义。
+
 ## 0.1.8
 
 - 运行期 DNS 备份/恢复增加 symlink 元数据、目标文件备份和 checksum 标记，避免破坏 resolver manager 管理的 `/etc/resolv.conf`。

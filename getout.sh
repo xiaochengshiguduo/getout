@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.1.8"
+SCRIPT_VERSION="0.1.9"
 INSTALL_PATH="/usr/local/bin/getout"
 UPDATE_URL="https://raw.githubusercontent.com/xiaochengshiguduo/getout/main/getout.sh"
 export DEBIAN_FRONTEND=noninteractive
@@ -23,9 +23,6 @@ RESOLV_ORIG="$CONF_DIR/resolv.conf.orig"
 GAI_ORIG="$CONF_DIR/gai.conf.orig"
 RESOLV_MARKER="$CONF_DIR/resolv.conf.getout"
 GAI_MARKER="$CONF_DIR/gai.conf.getout"
-RESOLV_META="$CONF_DIR/resolv.conf.meta"
-RESOLV_TARGET_ORIG="$CONF_DIR/resolv.conf.target.orig"
-GAI_META="$CONF_DIR/gai.conf.meta"
 RESOLV_META="$CONF_DIR/resolv.conf.meta"
 RESOLV_TARGET_ORIG="$CONF_DIR/resolv.conf.target.orig"
 GAI_META="$CONF_DIR/gai.conf.meta"
@@ -229,8 +226,10 @@ snapshot_runtime_files() {
   local dir
   dir="$(mktemp -d)" || fatal "创建回滚快照失败。"
   for file in "$CLIENT_CONF" "$TUN_CONF" "$ROUTES_UP" "$ROUTES_DOWN" "$TUN_SERVICE" "$MODE_FILE"; do
+    touch "$dir/$(basename "$file").missing" 2>/dev/null || true
     if [ -e "$file" ]; then
       cp -a "$file" "$dir/$(basename "$file")" 2>/dev/null || true
+      rm -f "$dir/$(basename "$file").missing" 2>/dev/null || true
     fi
   done
   echo "$dir"
@@ -243,6 +242,8 @@ restore_runtime_files() {
     base="$(basename "$file")"
     if [ -e "$dir/$base" ]; then
       cp -a "$dir/$base" "$file" 2>/dev/null || true
+    elif [ -e "$dir/$base.missing" ]; then
+      rm -f "$file" 2>/dev/null || true
     fi
   done
   systemctl daemon-reload 2>/dev/null || true
@@ -517,19 +518,19 @@ restore_managed_files_fallback() {
 }
 
 preflight_tun_runtime() {
-  [ -x "$TUN_BIN" ] || fatal "未找到可执行 tun2socks：$TUN_BIN"
-  [ -s "$TUN_CONF" ] || fatal "tun2socks 配置为空或不存在：$TUN_CONF"
-  [ -x "$ROUTES_UP" ] || fatal "routes-up.sh 不可执行：$ROUTES_UP"
-  [ -x "$ROUTES_DOWN" ] || fatal "routes-down.sh 不可执行：$ROUTES_DOWN"
-  bash -n "$ROUTES_UP" || fatal "routes-up.sh 语法校验失败。"
-  bash -n "$ROUTES_DOWN" || fatal "routes-down.sh 语法校验失败。"
-  command -v nft >/dev/null 2>&1 || fatal "未找到 nft，无法启用外部入站连接回包保护。"
+  [ -x "$TUN_BIN" ] || { err "未找到可执行 tun2socks：$TUN_BIN"; return 1; }
+  [ -s "$TUN_CONF" ] || { err "tun2socks 配置为空或不存在：$TUN_CONF"; return 1; }
+  [ -x "$ROUTES_UP" ] || { err "routes-up.sh 不可执行：$ROUTES_UP"; return 1; }
+  [ -x "$ROUTES_DOWN" ] || { err "routes-down.sh 不可执行：$ROUTES_DOWN"; return 1; }
+  bash -n "$ROUTES_UP" || { err "routes-up.sh 语法校验失败。"; return 1; }
+  bash -n "$ROUTES_DOWN" || { err "routes-down.sh 语法校验失败。"; return 1; }
+  command -v nft >/dev/null 2>&1 || { err "未找到 nft，无法启用外部入站连接回包保护。"; return 1; }
   nft delete table inet getout_preflight 2>/dev/null || true
-  nft add table inet getout_preflight >/dev/null 2>&1 || fatal "nftables 预检失败：无法创建 inet table。"
-  nft add chain inet getout_preflight prerouting '{ type filter hook prerouting priority -150; policy accept; }' >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; fatal "nftables 预检失败：当前内核不支持所需 prerouting 规则。"; }
-  nft add chain inet getout_preflight output '{ type route hook output priority -150; policy accept; }' >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; fatal "nftables 预检失败：当前内核不支持所需 output route hook。"; }
-  nft add rule inet getout_preflight prerouting iifname != "$TUN_NAME" ct state new fib daddr type local ct mark set "$BYPASS_MARK_ID" >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; fatal "nftables 预检失败：当前内核不支持 conntrack/fib 标记规则。"; }
-  nft add rule inet getout_preflight output ct mark "$BYPASS_MARK_ID" meta mark set "$BYPASS_MARK_ID" >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; fatal "nftables 预检失败：当前内核不支持 ct mark 输出规则。"; }
+  nft add table inet getout_preflight >/dev/null 2>&1 || { err "nftables 预检失败：无法创建 inet table。"; return 1; }
+  nft add chain inet getout_preflight prerouting '{ type filter hook prerouting priority -150; policy accept; }' >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败：当前内核不支持所需 prerouting 规则。"; return 1; }
+  nft add chain inet getout_preflight output '{ type route hook output priority -150; policy accept; }' >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败：当前内核不支持所需 output route hook。"; return 1; }
+  nft add rule inet getout_preflight prerouting iifname != "$TUN_NAME" ct state new fib daddr type local ct mark set "$BYPASS_MARK_ID" >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败：当前内核不支持 conntrack/fib 标记规则。"; return 1; }
+  nft add rule inet getout_preflight output ct mark "$BYPASS_MARK_ID" meta mark set "$BYPASS_MARK_ID" >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败：当前内核不支持 ct mark 输出规则。"; return 1; }
   nft delete table inet getout_preflight 2>/dev/null || true
 }
 
@@ -538,6 +539,14 @@ restore_runtime_or_warn() {
   restore_runtime_files "$snapshot"
   remove_runtime_snapshot "$snapshot"
   warn "启动失败，已尝试恢复旧配置和旧 systemd 文件。"
+}
+
+preflight_tun_runtime_with_rollback() {
+  local snapshot="$1"
+  preflight_tun_runtime || {
+    restore_runtime_or_warn "$snapshot"
+    exit 1
+  }
 }
 
 restart_tun_with_rollback() {
@@ -1206,7 +1215,7 @@ start_client() {
   fi
   write_tun_config
   write_routes_scripts
-  preflight_tun_runtime
+  preflight_tun_runtime_with_rollback "$snapshot"
   echo "$mode" > "$MODE_FILE"
   chmod_private_file "$MODE_FILE"
   write_tun_service "$mode"
@@ -1249,7 +1258,7 @@ configure_client() {
   write_tun_config
   write_routes_scripts
   write_tun_service "$mode"
-  preflight_tun_runtime
+  preflight_tun_runtime_with_rollback "$snapshot"
   echo "$mode" > "$MODE_FILE"
   chmod_private_file "$MODE_FILE"
   if [ "$was_active" = "1" ]; then
@@ -1298,7 +1307,7 @@ switch_priority_mode() {
   write_tun_config
   write_routes_scripts
   write_tun_service "$mode"
-  preflight_tun_runtime
+  preflight_tun_runtime_with_rollback "$snapshot"
   if [ "$was_active" = "1" ]; then
     systemctl stop getout-tun.service 2>/dev/null || true
     cleanup_rules
@@ -1359,7 +1368,7 @@ restart_getout() {
       write_tun_config
       write_routes_scripts
       write_tun_service "$mode"
-      preflight_tun_runtime
+      preflight_tun_runtime_with_rollback "$snapshot"
     fi
     cleanup_rules
     warn_ssh_protection_status
