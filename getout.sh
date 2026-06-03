@@ -16,8 +16,9 @@ CLIENT_CONF="$CONF_DIR/client.conf"
 TUN_CONF="$CONF_DIR/tun2socks.yaml"
 ROUTES_UP="$CONF_DIR/routes-up.sh"
 ROUTES_DOWN="$CONF_DIR/routes-down.sh"
-RUNTIME_DNS_SERVERS=("8.8.8.8" "1.1.1.1")
+RUNTIME_DNS_V4_SERVERS=("8.8.8.8" "1.1.1.1")
 RUNTIME_DNS_V6_SERVERS=("2001:4860:4860::8888" "2606:4700:4700::1111")
+DEFAULT_PRIORITY_MODE="v6"
 RESOLV_ORIG="$CONF_DIR/resolv.conf.orig"
 
 GOST_BIN="/usr/local/bin/getout-gost"
@@ -296,7 +297,9 @@ TUN_NAME="${TUN_NAME:-tun0}"
 MODE="${MODE:-v4}"
 RUNTIME_DNS_SERVERS="${RUNTIME_DNS_SERVERS:-2001:4860:4860::8888 2606:4700:4700::1111}"
 RUNTIME_DNS_ENABLE="${RUNTIME_DNS_ENABLE:-1}"
+PRIORITY_MODE="${PRIORITY_MODE:-v6}"
 RESOLV_ORIG="$CONF_DIR/resolv.conf.orig"
+GAI_ORIG="$CONF_DIR/gai.conf.orig"
 
 run() { "$@" 2>/dev/null || true; }
 is_ipv6() { [[ "${1:-}" == *:* ]]; }
@@ -346,8 +349,42 @@ apply_runtime_dns() {
   { for dns in $RUNTIME_DNS_SERVERS; do printf 'nameserver %s\n' "$dns"; done; printf 'options timeout:2 attempts:1\n'; } > /etc/resolv.conf 2>/dev/null || true
 }
 
+apply_gai_priority() {
+  [ -f "$GAI_ORIG" ] || cat /etc/gai.conf > "$GAI_ORIG" 2>/dev/null || true
+  awk '
+    $0 == "# getout managed priority begin" {skip=1; next}
+    $0 == "# getout managed priority end" {skip=0; next}
+    !skip {print}
+  ' /etc/gai.conf 2>/dev/null > /tmp/getout-gai.$$ || true
+  {
+    cat /tmp/getout-gai.$$ 2>/dev/null || true
+    printf '\n# getout managed priority begin\n'
+    printf 'label ::1/128       0\n'
+    printf 'label ::/0          1\n'
+    printf 'label 2002::/16     2\n'
+    printf 'label ::/96         3\n'
+    printf 'label ::ffff:0:0/96 4\n'
+    printf 'label fec0::/10     5\n'
+    printf 'label fc00::/7      6\n'
+    printf 'label 2001:0::/32   7\n'
+    printf 'precedence ::1/128       50\n'
+    if [ "$PRIORITY_MODE" = "v4" ]; then
+      printf 'precedence ::ffff:0:0/96 100\n'
+      printf 'precedence ::/0          40\n'
+    else
+      printf 'precedence ::/0          40\n'
+      printf 'precedence ::ffff:0:0/96 10\n'
+    fi
+    printf 'precedence 2002::/16     30\n'
+    printf 'precedence ::/96         20\n'
+    printf '# getout managed priority end\n'
+  } > /etc/gai.conf 2>/dev/null || true
+  rm -f /tmp/getout-gai.$$ 2>/dev/null || true
+}
+
 "$CONF_DIR/routes-down.sh" >/dev/null 2>&1 || true
 apply_runtime_dns
+apply_gai_priority
 
 # 保护外部主动连入本机的连接回包，避免 sing-box/xray/hysteria 等入站服务被出口路由接管。
 add_inbound_protect
@@ -394,6 +431,7 @@ TUN_NAME="${TUN_NAME:-tun0}"
 RUNTIME_DNS_SERVERS="${RUNTIME_DNS_SERVERS:-2001:4860:4860::8888 2606:4700:4700::1111}"
 RUNTIME_DNS_ENABLE="${RUNTIME_DNS_ENABLE:-1}"
 RESOLV_ORIG="$CONF_DIR/resolv.conf.orig"
+GAI_ORIG="$CONF_DIR/gai.conf.orig"
 
 run() { "$@" 2>/dev/null || true; }
 is_ipv6() { [[ "${1:-}" == *:* ]]; }
@@ -435,6 +473,21 @@ restore_dns() {
   fi
 }
 
+restore_gai() {
+  if [ -f "$GAI_ORIG" ]; then
+    cat "$GAI_ORIG" > /etc/gai.conf 2>/dev/null || true
+    rm -f "$GAI_ORIG"
+  else
+    awk '
+      $0 == "# getout managed priority begin" {skip=1; next}
+      $0 == "# getout managed priority end" {skip=0; next}
+      !skip {print}
+    ' /etc/gai.conf 2>/dev/null > /tmp/getout-gai.$$ || true
+    cat /tmp/getout-gai.$$ > /etc/gai.conf 2>/dev/null || true
+    rm -f /tmp/getout-gai.$$ 2>/dev/null || true
+  fi
+}
+
 run nft delete table inet "$NFT_TABLE"
 run ip rule del fwmark "$BYPASS_MARK_ID" lookup main pref 9
 run ip -6 rule del fwmark "$BYPASS_MARK_ID" lookup main pref 9
@@ -455,6 +508,7 @@ run ip -6 rule del lookup "$TABLE_ID" pref 20
 run ip route del default dev "$TUN_NAME" table "$TABLE_ID"
 run ip -6 route del default dev "$TUN_NAME" table "$TABLE_ID"
 restore_dns
+restore_gai
 EOF
   chmod +x "$ROUTES_UP" "$ROUTES_DOWN"
 }
@@ -598,31 +652,32 @@ install_server() {
   start_server
 }
 
-has_default_ipv4_route() {
-  ip -4 route show default 2>/dev/null | grep -q .
-}
-
-has_public_ipv4_exit() {
-  local ip
-  ip="$(curl -4 -s --connect-timeout 5 --max-time 8 https://api.ipify.org 2>/dev/null || curl -4 -s --connect-timeout 5 --max-time 8 http://v4.ident.me 2>/dev/null || true)"
-  is_ipv4 "$ip"
+current_priority_mode() {
+  if [ -f "$CLIENT_CONF" ]; then
+    # shellcheck disable=SC1090
+    . "$CLIENT_CONF"
+    case "${PRIORITY_MODE:-}" in
+      v4|v6) echo "$PRIORITY_MODE"; return 0 ;;
+    esac
+  fi
+  echo "$DEFAULT_PRIORITY_MODE"
 }
 
 runtime_dns_servers_text() {
-  if has_default_ipv4_route || has_public_ipv4_exit; then
-    printf '%s\n' "${RUNTIME_DNS_SERVERS[*]}"
-  else
-    printf '%s\n' "${RUNTIME_DNS_V6_SERVERS[*]}"
-  fi
+  case "${1:-$(current_priority_mode)}" in
+    v4) printf '%s\n' "${RUNTIME_DNS_V4_SERVERS[*]}" ;;
+    *) printf '%s\n' "${RUNTIME_DNS_V6_SERVERS[*]}" ;;
+  esac
 }
 
 write_client_conf() {
-  local mode="$1" address="$2" port="$3" username="$4" password="$5" ssh_ip ssh_ports v4 v6 runtime_dns
+  local mode="$1" address="$2" port="$3" username="$4" password="$5" priority_mode="${6:-}" ssh_ip ssh_ports v4 v6 runtime_dns
+  case "$priority_mode" in v4|v6) ;; *) priority_mode="$(current_priority_mode)" ;; esac
   ssh_ip="$(ssh_remote_ip || true)"
   ssh_ports="$(ssh_listen_ports | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
   v4="$(main_ipv4 || true)"
   v6="$(main_ipv6 || true)"
-  runtime_dns="$(runtime_dns_servers_text)"
+  runtime_dns="$(runtime_dns_servers_text "$priority_mode")"
   mkdir -p "$CONF_DIR"
   {
     printf 'MODE=%s\n' "$(shell_quote "$mode")"
@@ -639,6 +694,7 @@ write_client_conf() {
     printf 'BYPASS_MARK_ID=%s\n' "$(shell_quote "$BYPASS_MARK_ID")"
     printf 'NFT_TABLE=%s\n' "$(shell_quote "$NFT_TABLE")"
     printf 'TUN_NAME=%s\n' "$(shell_quote "$TUN_NAME")"
+    printf 'PRIORITY_MODE=%s\n' "$(shell_quote "$priority_mode")"
     printf 'RUNTIME_DNS_SERVERS=%s\n' "$(shell_quote "$runtime_dns")"
     printf 'RUNTIME_DNS_ENABLE=1\n'
   } > "$CLIENT_CONF"
@@ -803,6 +859,47 @@ configure_client() {
   fi
 }
 
+priority_action_label() {
+  case "$(current_priority_mode)" in
+    v4) echo "切换至 V6 优先模式" ;;
+    *) echo "切换至 V4 优先模式" ;;
+  esac
+}
+
+switch_priority_mode() {
+  require_root; require_debian; install_deps
+  [ -f "$CLIENT_CONF" ] || fatal "未找到出口配置，请先修改出口信息。"
+  local mode address port username password priority_mode
+  # shellcheck disable=SC1090
+  . "$CLIENT_CONF"
+  mode="${MODE:-v4}"
+  address="${SOCKS_ADDRESS:-}"
+  port="${SOCKS_PORT:-}"
+  username="${SOCKS_USERNAME:-}"
+  password="${SOCKS_PASSWORD:-}"
+  [ -n "$address" ] && [ -n "$port" ] || fatal "出口配置不完整，请先修改出口信息。"
+  case "$(current_priority_mode)" in
+    v4) priority_mode="v6" ;;
+    *) priority_mode="v4" ;;
+  esac
+  write_client_conf "$mode" "$address" "$port" "$username" "$password" "$priority_mode"
+  write_tun_config
+  write_routes_scripts
+  write_tun_service "$mode"
+  if tun_active; then
+    systemctl stop getout-tun.service 2>/dev/null || true
+    cleanup_rules
+    systemctl enable --now getout-tun.service
+    sleep 2
+    systemctl is-active --quiet getout-tun.service || fatal "getout-tun.service 重启失败，请查看：journalctl -u getout-tun.service -e"
+  fi
+  case "$priority_mode" in
+    v4) success "已切换至 V4 优先模式。" ;;
+    v6) success "已切换至 V6 优先模式。" ;;
+  esac
+  status
+}
+
 install_tun() {
   start_client "$1"
 }
@@ -924,6 +1021,10 @@ status() {
     # shellcheck disable=SC1090
     . "$CLIENT_CONF"
     echo "SOCKS5: [${SOCKS_ADDRESS:-}]:${SOCKS_PORT:-}"
+    case "${PRIORITY_MODE:-$DEFAULT_PRIORITY_MODE}" in
+      v4) echo "优先模式: V4 优先" ;;
+      *) echo "优先模式: V6 优先" ;;
+    esac
     echo "用户名: ${SOCKS_USERNAME:-}"
     echo "密码: ${SOCKS_PASSWORD:-}"
   else
@@ -958,24 +1059,26 @@ menu() {
   echo "3.$(menu_action_label v4)"
   echo "4.$(menu_action_label dual)"
   echo "5.修改出口信息"
-  echo "6.重启 getout"
-  echo "7.查看状态"
-  echo "8.更新 getout"
-  echo "9.卸载 getout"
-  echo "10.退出"
+  echo "6.$(priority_action_label)"
+  echo "7.重启 getout"
+  echo "8.查看状态"
+  echo "9.更新 getout"
+  echo "10.卸载 getout"
+  echo "11.退出"
   echo
-  read -rp "请选择 [1-10]: " choice
+  read -rp "请选择 [1-11]: " choice
   case "$choice" in
     1) if server_active; then stop_server; else start_server; fi ;;
     2) configure_server ;;
     3) if client_mode_active v4; then stop_client; else start_client v4; fi ;;
     4) if client_mode_active dual; then stop_client; else start_client dual; fi ;;
     5) configure_client ;;
-    6) restart_getout ;;
-    7) status ;;
-    8) update_getout ;;
-    9) read -rp "确认卸载 getout? [y/N]: " yn; [[ "$yn" =~ ^[Yy]$ ]] && uninstall_all || echo "已取消" ;;
-    10) exit 0 ;;
+    6) switch_priority_mode ;;
+    7) restart_getout ;;
+    8) status ;;
+    9) update_getout ;;
+    10) read -rp "确认卸载 getout? [y/N]: " yn; [[ "$yn" =~ ^[Yy]$ ]] && uninstall_all || echo "已取消" ;;
+    11) exit 0 ;;
     *) fatal "无效选项。" ;;
   esac
 }
