@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.1.4"
+SCRIPT_VERSION="0.1.5"
 INSTALL_PATH="/usr/local/bin/getout"
 UPDATE_URL="https://raw.githubusercontent.com/xiaochengshiguduo/getout/main/getout.sh"
 export DEBIAN_FRONTEND=noninteractive

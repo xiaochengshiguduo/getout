@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.5
+
+- 新增外部入站连接回包保护：使用 nftables/conntrack 标记外部主动连入本机的连接，避免出口模式影响 sing-box、xray、hysteria、tuic、nginx 等入站服务。
+- SSH 回包保护改为自动检测实际 SSH 监听端口，不再只保护默认 22 端口。
+- 修复出口模式重启时未刷新 `routes-up.sh` / `routes-down.sh` 的问题，确保更新后的路由逻辑立即生效。
+- 新增 V4/V6 优先模式切换，默认 V6 优先；V4 优先使用 IPv4 DNS 并优先选择 IPv4 地址，V6 优先使用 IPv6 DNS 并优先选择 IPv6 地址。
+- 移除运行期 DNS 根据 IPv4 能力自动判断的逻辑。
+- README 更新管理面板、DNS 策略、路由保护和 ICMP 说明。
+
 ## 0.1.4
 
 - 二进制下载改为先常规下载，失败后再使用 DNS64 兜底，兼容纯 IPv4 VPS。

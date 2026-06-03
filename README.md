@@ -10,10 +10,11 @@
 - V4 单栈模式：使用 `hev-socks5-tunnel` 接管本机 IPv4 流量，IPv6 保持原生。
 - V4+V6 双栈模式：使用 `hev-socks5-tunnel` 同时接管本机 IPv4 和 IPv6 流量。
 - 全局命令：首次运行后自动安装 `/usr/local/bin/getout`，之后直接输入 `getout` 打开管理面板。
-- 一键更新：支持 `getout update` 或在管理面板选择 `8.更新 getout`。
-- 自动 DNS 策略：检测到默认 IPv4 路由或公网 IPv4 出口可用时使用 IPv4 DNS，否则使用 IPv6 DNS。
+- 一键更新：支持 `getout update` 或在管理面板选择 `9.更新 getout`。
+- V4/V6 优先模式：可在管理面板动态切换 V4 优先或 V6 优先，默认 V6 优先。
+- 运行期 DNS 策略：V4 优先模式使用 IPv4 DNS，V6 优先模式使用 IPv6 DNS。
 - 下载阶段先尝试常规下载，失败后使用 DNS64 兜底，兼容 IPv4、IPv6 和双栈 VPS。
-- SSH / 上游 SOCKS5 / DNS 路由保护，降低出口模式接管路由后断联的风险。
+- SSH / 上游 SOCKS5 / DNS / 外部入站连接回包路由保护，降低出口模式接管路由后断联或影响本机代理服务的风险。
 - 入口/出口互斥：启动入口模式会停止出口模式；启动出口模式会停止入口模式。
 - 自启动跟随当前状态：运行中则启用开机自启，手动关闭则关闭开机自启。
 - 支持修改入口信息、修改出口信息、重启、状态查看、更新、卸载清理。
@@ -70,13 +71,14 @@ getout uninstall
 3.启动 V4 单栈模式
 4.启动 V4+V6 双栈模式
 5.修改出口信息
-6.重启 getout
-7.查看状态
-8.更新 getout
-9.卸载 getout
-10.退出
+6.切换至 V4 优先模式
+7.重启 getout
+8.查看状态
+9.更新 getout
+10.卸载 getout
+11.退出
 
-请选择 [1-10]:
+请选择 [1-11]:
 ```
 
 菜单会根据当前运行状态动态显示明确动作，例如：
@@ -84,6 +86,8 @@ getout uninstall
 - `关闭入口模式`
 - `关闭 V4 单栈模式`
 - `关闭 V4+V6 双栈模式`
+- `切换至 V4 优先模式`
+- `切换至 V6 优先模式`
 
 ## 模式说明
 
@@ -115,16 +119,36 @@ getout-gost.service
 
 适合：希望当前 VPS 的公网流量统一走指定 SOCKS5 出口。
 
-## DNS 策略
+## V4/V6 优先模式与 DNS 策略
 
-出口模式运行时，`getout` 会根据当前 VPS 网络能力自动选择运行期 DNS：
+出口模式运行时，`getout` 默认使用 V6 优先模式。你可以在管理面板选择：
 
-- 检测到默认 IPv4 路由或公网 IPv4 出口可用：使用 `8.8.8.8` / `1.1.1.1`。
-- 未检测到 IPv4 能力：使用 `2001:4860:4860::8888` / `2606:4700:4700::1111`。
+- `切换至 V4 优先模式`
+- `切换至 V6 优先模式`
+
+V4 优先模式会：
+
+- 使用 `8.8.8.8` / `1.1.1.1` 作为运行期 DNS；
+- 调整 `/etc/gai.conf`，让双栈域名优先选择 IPv4 地址。
+
+V6 优先模式会：
+
+- 使用 `2001:4860:4860::8888` / `2606:4700:4700::1111` 作为运行期 DNS；
+- 调整 `/etc/gai.conf`，让双栈域名优先选择 IPv6 地址。
 
 下载二进制时会先尝试常规下载，失败后再使用 DNS64 兜底，以兼容 IPv4、IPv6 和双栈环境。
 
-停止出口模式或卸载时会恢复原始 DNS。
+停止出口模式或卸载时会恢复原始 DNS 和 `/etc/gai.conf`。
+
+## 路由保护
+
+出口模式会接管本机主动出站流量，同时保护关键回包不被错误送入 `tun0`：
+
+- 自动检测 SSH 实际监听端口并保护 SSH 回包，不依赖 SSH 是否使用 22 端口；
+- 保护上游 SOCKS5 和运行期 DNS 路由，避免代理回环；
+- 使用 nftables/conntrack 保护外部主动连入本机的连接回包，避免影响 sing-box、xray、hysteria、tuic、nginx 等本机入站服务。
+
+`ping`/ICMP 不经过 SOCKS 出口代理，`ping` 不通不代表 TCP/UDP 出口不可用。建议使用 `curl` 或应用自身连接测试确认出口状态。
 
 ## 文件位置
 
@@ -135,6 +159,8 @@ getout-gost.service
 /etc/getout/tun2socks.yaml
 /etc/getout/routes-up.sh
 /etc/getout/routes-down.sh
+/etc/getout/resolv.conf.orig
+/etc/getout/gai.conf.orig
 /usr/local/bin/getout
 /usr/local/bin/getout-gost
 /usr/local/bin/getout-tun2socks
@@ -151,7 +177,7 @@ getout update
 也可以在管理面板选择：
 
 ```text
-8.更新 getout
+9.更新 getout
 ```
 
 更新成功后会显示当前版本。
@@ -166,7 +192,7 @@ getout uninstall
 
 - 停止入口/出口服务；
 - 清理路由规则；
-- 恢复 DNS；
+- 恢复 DNS 和 `/etc/gai.conf`；
 - 禁用 systemd 自启动；
 - 删除配置、全局命令、二进制和 systemd unit。
 
@@ -174,7 +200,8 @@ getout uninstall
 
 - 仅支持 Debian。
 - 脚本会在常规下载失败后临时修改 `/etc/resolv.conf` 使用 DNS64，DNS64 下载结束后恢复。
-- 出口模式运行时会临时修改 `/etc/resolv.conf`，停止或卸载时恢复。
+- 出口模式运行时会临时修改 `/etc/resolv.conf` 和 `/etc/gai.conf`，停止或卸载时恢复。
+- `ping`/ICMP 不经过 SOCKS 出口代理，出口连通性请优先用 TCP/UDP 应用测试。
 - 请确保 VPS 面板已开启 TUN。
 - 状态页会明文显示入口/出口密码，请只在可信终端使用。
 
