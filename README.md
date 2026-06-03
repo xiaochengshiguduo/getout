@@ -140,7 +140,7 @@ V6 优先模式会：
 
 下载二进制时会先尝试常规下载，失败后再使用 DNS64 兜底，以兼容 IPv4、IPv6 和双栈环境。
 
-停止出口模式或卸载时会恢复原始 DNS 和 `/etc/gai.conf`。
+停止出口模式或卸载时会恢复原始 DNS 和 `/etc/gai.conf`。如果检测到原始 DNS 备份缺失，`getout` 会保留当前 DNS 并给出警告，避免盲目恢复到未知内容。
 
 `/etc/gai.conf` 影响的是 glibc 地址选择；部分 Go、Rust、Node 或静态链接程序可能使用自己的解析和地址排序逻辑。
 
@@ -151,7 +151,8 @@ V6 优先模式会：
 - 自动检测 SSH 实际监听端口并保护 SSH 回包，不依赖 SSH 是否使用 22 端口；
 - 启动或重启出口模式前会显示 SSH 回包保护检测结果，检测不足时会给出断联风险警告；
 - 保护上游 SOCKS5 和运行期 DNS 路由，避免代理回环；
-- 使用 nftables/conntrack 保护外部主动连入本机的连接回包，避免影响 sing-box、xray、hysteria、tuic、nginx 等本机入站服务。
+- 使用 nftables/conntrack 保护外部主动连入本机的连接回包，避免影响 sing-box、xray、hysteria、tuic、nginx 等本机入站服务；
+- 出口模式启动前会校验 nftables 入站回包保护是否可用，校验失败会停止启动，避免保护未生效却静默运行。
 
 `ping`/ICMP 不经过 SOCKS 出口代理，`ping` 不通不代表 TCP/UDP 出口不可用。建议使用 `curl` 或应用自身连接测试确认出口状态。
 
@@ -165,7 +166,9 @@ V6 优先模式会：
 /etc/getout/routes-up.sh
 /etc/getout/routes-down.sh
 /etc/getout/resolv.conf.orig
+/etc/getout/resolv.conf.getout
 /etc/getout/gai.conf.orig
+/etc/getout/gai.conf.getout
 /usr/local/bin/getout
 /usr/local/bin/getout-gost
 /usr/local/bin/getout-tun2socks
@@ -187,13 +190,13 @@ getout update
 
 更新成功后会显示当前版本。
 
-如果 getout 服务正在运行，更新后建议执行：
+如果 getout 服务正在运行，更新时会提示是否立即执行：
 
 ```bash
 getout restart
 ```
 
-这样可以刷新 systemd 服务文件、`routes-up.sh` 和 `routes-down.sh`。
+这样可以刷新 systemd 服务文件、`routes-up.sh` 和 `routes-down.sh`。如果跳过自动重启，请稍后手动执行 `getout restart`。
 
 ## 卸载
 
@@ -206,6 +209,7 @@ getout uninstall
 - 停止入口/出口服务；
 - 清理路由规则；
 - 恢复 DNS 和 `/etc/gai.conf`；
+- 即使生成的 `routes-down.sh` 缺失或损坏，也会尝试兜底清理 getout 相关路由规则、table 20 默认路由和 nft 表；
 - 禁用 systemd 自启动；
 - 删除配置、全局命令、二进制和 systemd unit。
 
@@ -214,7 +218,9 @@ getout uninstall
 - 仅支持 Debian。
 - 脚本会在常规下载失败后临时修改 `/etc/resolv.conf` 使用 DNS64，DNS64 下载结束后恢复。
 - 出口模式运行时会临时修改 `/etc/resolv.conf` 和 `/etc/gai.conf`，停止或卸载时恢复。
+- `/etc/resolv.conf` 和 `/etc/gai.conf` 的恢复依赖首次接管前保存的原始备份；如果备份缺失，脚本会警告并避免盲目覆盖未知 DNS。
 - `/etc/getout` 会设置为私有目录，配置文件包含代理账号密码。
+- 脚本在读取配置文件前会校验配置由 root 拥有，且 group/other 不可写。
 - 入口模式必须设置用户名密码；用户名和密码不能包含空白字符或 URL 保留字符。
 - `ping`/ICMP 不经过 SOCKS 出口代理，出口连通性请优先用 TCP/UDP 应用测试。
 - 请确保 VPS 面板已开启 TUN。

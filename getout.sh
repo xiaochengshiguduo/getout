@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.1.6"
+SCRIPT_VERSION="0.1.7"
 INSTALL_PATH="/usr/local/bin/getout"
 UPDATE_URL="https://raw.githubusercontent.com/xiaochengshiguduo/getout/main/getout.sh"
 export DEBIAN_FRONTEND=noninteractive
@@ -20,6 +20,9 @@ RUNTIME_DNS_V4_SERVERS=("8.8.8.8" "1.1.1.1")
 RUNTIME_DNS_V6_SERVERS=("2001:4860:4860::8888" "2606:4700:4700::1111")
 DEFAULT_PRIORITY_MODE="v6"
 RESOLV_ORIG="$CONF_DIR/resolv.conf.orig"
+GAI_ORIG="$CONF_DIR/gai.conf.orig"
+RESOLV_MARKER="$CONF_DIR/resolv.conf.getout"
+GAI_MARKER="$CONF_DIR/gai.conf.getout"
 
 GOST_BIN="/usr/local/bin/getout-gost"
 TUN_BIN="/usr/local/bin/getout-tun2socks"
@@ -108,7 +111,15 @@ update_getout() {
   require_root
   install_from_update_url update
   if service_active getout-tun.service || service_active getout-gost.service; then
-    warn "getout 正在运行。更新已安装，建议执行 getout restart 使服务文件和路由脚本刷新生效。"
+    warn "getout 正在运行。需要重启才能刷新服务文件和路由脚本。"
+    if [ -t 0 ]; then
+      local yn
+      read -rp "是否立即执行 getout restart? [y/N]: " yn
+      if [[ "$yn" =~ ^[Yy]$ ]]; then
+        exec "$INSTALL_PATH" restart
+      fi
+    fi
+    warn "已跳过自动重启。请稍后执行 getout restart。"
   fi
 }
 
@@ -119,6 +130,14 @@ ensure_conf_dir() {
 
 chmod_private_file() {
   [ -f "$1" ] && chmod 600 "$1" 2>/dev/null || true
+}
+
+assert_private_config() {
+  local file="$1"
+  [ -f "$file" ] || fatal "配置文件不存在：$file"
+  if ! find "$file" -maxdepth 0 -type f -user root ! -perm /022 | grep -q .; then
+    fatal "配置文件权限不安全：$file。请确认 owner=root 且 group/other 不可写。"
+  fi
 }
 
 secure_existing_files() {
@@ -310,7 +329,9 @@ ssh_listen_ports() {
     elif [ -x /usr/sbin/sshd ]; then
       /usr/sbin/sshd -T 2>/dev/null | awk '$1=="port" {print $2}'
     fi
-    ss -H -ltnp 2>/dev/null | awk '/sshd/ {n=split($4,a,":"); print a[n]}'
+    if command -v ss >/dev/null 2>&1; then
+      ss -H -ltnp 2>/dev/null | awk '/sshd/ {n=split($4,a,":"); print a[n]}'
+    fi
   } | awk '/^[0-9]+$/ && $1 >= 1 && $1 <= 65535 {seen[$1]=1} END {for (p in seen) print p}' | sort -n
 }
 
@@ -322,14 +343,92 @@ main_ipv6() {
   ip -6 route get 2606:4700:4700::1111 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}' || true
 }
 
+run_quiet() { "$@" 2>/dev/null || true; }
+run_all_quiet() { while "$@" 2>/dev/null; do :; done; }
+
+fallback_cleanup_rules() {
+  local port cidr dns
+  run_quiet nft delete table inet "$NFT_TABLE"
+  run_all_quiet ip rule del fwmark "$BYPASS_MARK_ID" lookup main pref 9
+  run_all_quiet ip -6 rule del fwmark "$BYPASS_MARK_ID" lookup main pref 9
+  run_all_quiet ip rule del fwmark "$MARK_ID" lookup main pref 10
+  run_all_quiet ip -6 rule del fwmark "$MARK_ID" lookup main pref 10
+  run_all_quiet ip rule del lookup "$TABLE_ID" pref 20
+  run_all_quiet ip -6 rule del lookup "$TABLE_ID" pref 20
+  run_all_quiet ip route del default dev "$TUN_NAME" table "$TABLE_ID"
+  run_all_quiet ip -6 route del default dev "$TUN_NAME" table "$TABLE_ID"
+  for port in $(ssh_listen_ports | tr '\n' ' ') 22; do
+    [[ "$port" =~ ^[0-9]+$ ]] || continue
+    run_all_quiet ip rule del ipproto tcp sport "$port" lookup main pref 6
+    run_all_quiet ip -6 rule del ipproto tcp sport "$port" lookup main pref 6
+    run_all_quiet ip rule del sport "$port" lookup main pref 6
+    run_all_quiet ip -6 rule del sport "$port" lookup main pref 6
+  done
+  for cidr in 127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 224.0.0.0/4; do
+    run_all_quiet ip rule del to "$cidr" lookup main pref 16
+  done
+  for cidr in ::1/128 fe80::/10 fc00::/7 ff00::/8; do
+    run_all_quiet ip -6 rule del to "$cidr" lookup main pref 16
+  done
+  for dns in "${RUNTIME_DNS_V4_SERVERS[@]}" "${RUNTIME_DNS_V6_SERVERS[@]}"; do
+    if is_ipv6 "$dns"; then
+      run_all_quiet ip -6 rule del to "$dns/128" lookup main pref 7
+    elif is_ipv4 "$dns"; then
+      run_all_quiet ip rule del to "$dns/32" lookup main pref 7
+    fi
+  done
+}
+
+restore_managed_files_fallback() {
+  if [ -f "$RESOLV_ORIG" ]; then
+    cat "$RESOLV_ORIG" > /etc/resolv.conf 2>/dev/null || warn "恢复 /etc/resolv.conf 失败，请手动检查 DNS。"
+    rm -f "$RESOLV_ORIG" "$CONF_DIR/resolv.conf.getout" 2>/dev/null || true
+  elif [ -f "$CONF_DIR/resolv.conf.getout" ]; then
+    warn "/etc/resolv.conf 原始备份缺失，已保留当前 DNS，避免误恢复到未知内容。"
+  fi
+  if [ -f "$GAI_ORIG" ]; then
+    cat "$GAI_ORIG" > /etc/gai.conf 2>/dev/null || warn "恢复 /etc/gai.conf 失败，请手动检查地址优先级。"
+    rm -f "$GAI_ORIG" "$CONF_DIR/gai.conf.getout" 2>/dev/null || true
+  elif [ -f "$CONF_DIR/gai.conf.getout" ] && [ -f /etc/gai.conf ]; then
+    local tmp
+    tmp="$(mktemp)" || return 0
+    awk '
+      $0 == "# getout managed priority begin" {skip=1; next}
+      $0 == "# getout managed priority end" {skip=0; next}
+      !skip {print}
+    ' /etc/gai.conf 2>/dev/null > "$tmp" || true
+    cat "$tmp" > /etc/gai.conf 2>/dev/null || true
+    rm -f "$tmp" "$CONF_DIR/gai.conf.getout" 2>/dev/null || true
+    warn "/etc/gai.conf 原始备份缺失，已移除 getout 管理块。"
+  fi
+}
+
+preflight_tun_runtime() {
+  [ -x "$TUN_BIN" ] || fatal "未找到可执行 tun2socks：$TUN_BIN"
+  [ -s "$TUN_CONF" ] || fatal "tun2socks 配置为空或不存在：$TUN_CONF"
+  [ -x "$ROUTES_UP" ] || fatal "routes-up.sh 不可执行：$ROUTES_UP"
+  [ -x "$ROUTES_DOWN" ] || fatal "routes-down.sh 不可执行：$ROUTES_DOWN"
+  bash -n "$ROUTES_UP" || fatal "routes-up.sh 语法校验失败。"
+  bash -n "$ROUTES_DOWN" || fatal "routes-down.sh 语法校验失败。"
+  command -v nft >/dev/null 2>&1 || fatal "未找到 nft，无法启用外部入站连接回包保护。"
+}
+
 write_routes_scripts() {
   ensure_conf_dir
   cat > "$ROUTES_UP" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 CONF_DIR="/etc/getout"
+assert_private_config() {
+  local file="$1"
+  [ -f "$file" ] || return 1
+  find "$file" -maxdepth 0 -type f -user root ! -perm /022 | grep -q .
+}
 # shellcheck disable=SC1091
-[ -f "$CONF_DIR/client.conf" ] && . "$CONF_DIR/client.conf"
+if [ -f "$CONF_DIR/client.conf" ]; then
+  assert_private_config "$CONF_DIR/client.conf" || { echo "[错误] client.conf 权限不安全，已拒绝启动路由脚本。" >&2; exit 1; }
+  . "$CONF_DIR/client.conf"
+fi
 TABLE_ID="${TABLE_ID:-20}"
 MARK_ID="${MARK_ID:-438}"
 BYPASS_MARK_ID="${BYPASS_MARK_ID:-439}"
@@ -341,6 +440,8 @@ RUNTIME_DNS_ENABLE="${RUNTIME_DNS_ENABLE:-1}"
 PRIORITY_MODE="${PRIORITY_MODE:-v6}"
 RESOLV_ORIG="$CONF_DIR/resolv.conf.orig"
 GAI_ORIG="$CONF_DIR/gai.conf.orig"
+RESOLV_MARKER="$CONF_DIR/resolv.conf.getout"
+GAI_MARKER="$CONF_DIR/gai.conf.getout"
 
 run() { "$@" 2>/dev/null || true; }
 run_all() { while "$@" 2>/dev/null; do :; done; }
@@ -358,7 +459,9 @@ ssh_listen_ports() {
     elif [ -x /usr/sbin/sshd ]; then
       /usr/sbin/sshd -T 2>/dev/null | awk '$1=="port" {print $2}'
     fi
-    ss -H -ltnp 2>/dev/null | awk '/sshd/ {n=split($4,a,":"); print a[n]}'
+    if command -v ss >/dev/null 2>&1; then
+      ss -H -ltnp 2>/dev/null | awk '/sshd/ {n=split($4,a,":"); print a[n]}'
+    fi
   } | awk '/^[0-9]+$/ && $1 >= 1 && $1 <= 65535 {seen[$1]=1} END {for (p in seen) print p}' | sort -n
 }
 ssh_ports_text() {
@@ -378,25 +481,44 @@ add_ssh_port_rules() {
   done
 }
 add_inbound_protect() {
-  command -v nft >/dev/null 2>&1 || return 0
-  run nft delete table inet "$NFT_TABLE"
-  run nft add table inet "$NFT_TABLE"
-  run nft add chain inet "$NFT_TABLE" prerouting '{ type filter hook prerouting priority -150; policy accept; }'
-  run nft add chain inet "$NFT_TABLE" output '{ type route hook output priority -150; policy accept; }'
-  run nft add rule inet "$NFT_TABLE" prerouting iifname != "$TUN_NAME" ct state new fib daddr type local ct mark set "$BYPASS_MARK_ID"
-  run nft add rule inet "$NFT_TABLE" output ct mark "$BYPASS_MARK_ID" meta mark set "$BYPASS_MARK_ID"
+  command -v nft >/dev/null 2>&1 || { echo "[错误] 未找到 nft，无法启用外部入站连接回包保护。" >&2; return 1; }
+  nft delete table inet "$NFT_TABLE" 2>/dev/null || true
+  nft add table inet "$NFT_TABLE"
+  nft add chain inet "$NFT_TABLE" prerouting '{ type filter hook prerouting priority -150; policy accept; }'
+  nft add chain inet "$NFT_TABLE" output '{ type route hook output priority -150; policy accept; }'
+  nft add rule inet "$NFT_TABLE" prerouting iifname != "$TUN_NAME" ct state new fib daddr type local ct mark set "$BYPASS_MARK_ID"
+  nft add rule inet "$NFT_TABLE" output ct mark "$BYPASS_MARK_ID" meta mark set "$BYPASS_MARK_ID"
+  nft list table inet "$NFT_TABLE" >/dev/null
 }
 
 apply_runtime_dns() {
   [ "$RUNTIME_DNS_ENABLE" = "1" ] || return 0
-  [ -f "$RESOLV_ORIG" ] || cat /etc/resolv.conf > "$RESOLV_ORIG" 2>/dev/null || true
-  { for dns in $RUNTIME_DNS_SERVERS; do printf 'nameserver %s\n' "$dns"; done; printf 'options timeout:2 attempts:1\n'; } > /etc/resolv.conf 2>/dev/null || true
+  if [ ! -f "$RESOLV_ORIG" ]; then
+    if [ -f "$RESOLV_MARKER" ]; then
+      echo "[警告] 检测到 /etc/resolv.conf 可能已由 getout 管理，但原始备份缺失；为避免错误覆盖原始 DNS，本次不重建备份。" >&2
+    else
+      cat /etc/resolv.conf > "$RESOLV_ORIG" 2>/dev/null || true
+    fi
+  fi
+  {
+    printf '# getout managed resolv begin\n'
+    for dns in $RUNTIME_DNS_SERVERS; do printf 'nameserver %s\n' "$dns"; done
+    printf 'options timeout:2 attempts:1\n'
+    printf '# getout managed resolv end\n'
+  } > /etc/resolv.conf 2>/dev/null || { echo "[错误] 写入 /etc/resolv.conf 失败。" >&2; return 1; }
+  : > "$RESOLV_MARKER" 2>/dev/null || true
 }
 
 apply_gai_priority() {
   local tmp
   tmp="$(mktemp)" || return 0
-  [ -f "$GAI_ORIG" ] || cat /etc/gai.conf > "$GAI_ORIG" 2>/dev/null || true
+  if [ ! -f "$GAI_ORIG" ]; then
+    if [ -f "$GAI_MARKER" ]; then
+      echo "[警告] 检测到 /etc/gai.conf 可能已由 getout 管理，但原始备份缺失；本次只更新 getout 管理块。" >&2
+    else
+      cat /etc/gai.conf > "$GAI_ORIG" 2>/dev/null || true
+    fi
+  fi
   awk '
     $0 == "# getout managed priority begin" {skip=1; next}
     $0 == "# getout managed priority end" {skip=0; next}
@@ -425,6 +547,7 @@ apply_gai_priority() {
     printf 'precedence ::/96         20\n'
     printf '# getout managed priority end\n'
   } > /etc/gai.conf 2>/dev/null || true
+  : > "$GAI_MARKER" 2>/dev/null || true
   rm -f "$tmp" 2>/dev/null || true
 }
 
@@ -467,8 +590,19 @@ EOF
 #!/usr/bin/env bash
 set -euo pipefail
 CONF_DIR="/etc/getout"
+assert_private_config() {
+  local file="$1"
+  [ -f "$file" ] || return 1
+  find "$file" -maxdepth 0 -type f -user root ! -perm /022 | grep -q .
+}
 # shellcheck disable=SC1091
-[ -f "$CONF_DIR/client.conf" ] && . "$CONF_DIR/client.conf"
+if [ -f "$CONF_DIR/client.conf" ]; then
+  if assert_private_config "$CONF_DIR/client.conf"; then
+    . "$CONF_DIR/client.conf"
+  else
+    echo "[警告] client.conf 权限不安全，routes-down 将使用默认值尽量兜底清理。" >&2
+  fi
+fi
 TABLE_ID="${TABLE_ID:-20}"
 MARK_ID="${MARK_ID:-438}"
 BYPASS_MARK_ID="${BYPASS_MARK_ID:-439}"
@@ -478,6 +612,8 @@ RUNTIME_DNS_SERVERS="${RUNTIME_DNS_SERVERS:-2001:4860:4860::8888 2606:4700:4700:
 RUNTIME_DNS_ENABLE="${RUNTIME_DNS_ENABLE:-1}"
 RESOLV_ORIG="$CONF_DIR/resolv.conf.orig"
 GAI_ORIG="$CONF_DIR/gai.conf.orig"
+RESOLV_MARKER="$CONF_DIR/resolv.conf.getout"
+GAI_MARKER="$CONF_DIR/gai.conf.getout"
 
 run() { "$@" 2>/dev/null || true; }
 run_all() { while "$@" 2>/dev/null; do :; done; }
@@ -495,7 +631,9 @@ ssh_listen_ports() {
     elif [ -x /usr/sbin/sshd ]; then
       /usr/sbin/sshd -T 2>/dev/null | awk '$1=="port" {print $2}'
     fi
-    ss -H -ltnp 2>/dev/null | awk '/sshd/ {n=split($4,a,":"); print a[n]}'
+    if command -v ss >/dev/null 2>&1; then
+      ss -H -ltnp 2>/dev/null | awk '/sshd/ {n=split($4,a,":"); print a[n]}'
+    fi
   } | awk '/^[0-9]+$/ && $1 >= 1 && $1 <= 65535 {seen[$1]=1} END {for (p in seen) print p}' | sort -n
 }
 ssh_ports_text() {
@@ -519,6 +657,9 @@ restore_dns() {
   if [ -f "$RESOLV_ORIG" ]; then
     cat "$RESOLV_ORIG" > /etc/resolv.conf 2>/dev/null || true
     rm -f "$RESOLV_ORIG"
+    rm -f "$RESOLV_MARKER" 2>/dev/null || true
+  elif [ -f "$RESOLV_MARKER" ]; then
+    echo "[警告] /etc/resolv.conf 原始备份缺失，已保留当前 DNS，避免误恢复到未知内容。" >&2
   fi
 }
 
@@ -526,6 +667,7 @@ restore_gai() {
   if [ -f "$GAI_ORIG" ]; then
     cat "$GAI_ORIG" > /etc/gai.conf 2>/dev/null || true
     rm -f "$GAI_ORIG"
+    rm -f "$GAI_MARKER" 2>/dev/null || true
   else
     local tmp
     tmp="$(mktemp)" || return 0
@@ -536,6 +678,7 @@ restore_gai() {
     ' /etc/gai.conf 2>/dev/null > "$tmp" || true
     cat "$tmp" > /etc/gai.conf 2>/dev/null || true
     rm -f "$tmp" 2>/dev/null || true
+    rm -f "$GAI_MARKER" 2>/dev/null || true
   fi
 }
 
@@ -626,6 +769,7 @@ prompt_server_info() {
 
 write_gost_service() {
   [ -f "$SERVER_CONF" ] || fatal "未找到入口配置，请先修改入口信息。"
+  assert_private_config "$SERVER_CONF"
   # shellcheck disable=SC1090
   . "$SERVER_CONF"
   local auth listen
@@ -666,6 +810,7 @@ start_server() {
   chmod_private_file "$MODE_FILE"
   systemctl enable --now getout-gost.service
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+    assert_private_config "$SERVER_CONF"
     # shellcheck disable=SC1090
     . "$SERVER_CONF"
     ufw allow "${PORT}/tcp" >/dev/null || true
@@ -707,6 +852,7 @@ install_server() {
 
 current_priority_mode() {
   if [ -f "$CLIENT_CONF" ]; then
+    assert_private_config "$CLIENT_CONF"
     # shellcheck disable=SC1090
     . "$CLIENT_CONF"
     case "${PRIORITY_MODE:-}" in
@@ -718,6 +864,7 @@ current_priority_mode() {
 
 warn_ssh_protection_status() {
   [ -f "$CLIENT_CONF" ] || return 0
+  assert_private_config "$CLIENT_CONF"
   # shellcheck disable=SC1090
   . "$CLIENT_CONF"
   if [ -z "${SSH_REMOTE_IP:-}" ]; then
@@ -789,6 +936,7 @@ ask_socks_config() {
 reuse_client_config_for_mode() {
   local mode="$1" address port username password
   [ -f "$CLIENT_CONF" ] || return 1
+  assert_private_config "$CLIENT_CONF"
   # shellcheck disable=SC1090
   . "$CLIENT_CONF"
   address="${SOCKS_ADDRESS:-}"
@@ -801,6 +949,7 @@ reuse_client_config_for_mode() {
 }
 
 write_tun_config() {
+  assert_private_config "$CLIENT_CONF"
   # shellcheck disable=SC1090
   . "$CLIENT_CONF"
   cat > "$TUN_CONF" <<EOF
@@ -872,6 +1021,7 @@ start_client() {
   fi
   write_tun_config
   write_routes_scripts
+  preflight_tun_runtime
   echo "$mode" > "$MODE_FILE"
   chmod_private_file "$MODE_FILE"
   write_tun_service "$mode"
@@ -902,6 +1052,7 @@ configure_client() {
     mode="$(current_mode)"
     [ "$mode" = "v4" ] || [ "$mode" = "dual" ] || mode="v4"
   elif [ -f "$CLIENT_CONF" ]; then
+    assert_private_config "$CLIENT_CONF"
     # shellcheck disable=SC1090
     . "$CLIENT_CONF"
     mode="${MODE:-v4}"
@@ -913,6 +1064,7 @@ configure_client() {
   write_tun_config
   write_routes_scripts
   write_tun_service "$mode"
+  preflight_tun_runtime
   echo "$mode" > "$MODE_FILE"
   chmod_private_file "$MODE_FILE"
   if tun_active; then
@@ -943,6 +1095,7 @@ switch_priority_mode() {
   require_root; require_debian; install_deps
   [ -f "$CLIENT_CONF" ] || fatal "未找到出口配置，请先修改出口信息。"
   local mode address port username password priority_mode
+  assert_private_config "$CLIENT_CONF"
   # shellcheck disable=SC1090
   . "$CLIENT_CONF"
   mode="${MODE:-v4}"
@@ -959,6 +1112,7 @@ switch_priority_mode() {
   write_tun_config
   write_routes_scripts
   write_tun_service "$mode"
+  preflight_tun_runtime
   if tun_active; then
     systemctl stop getout-tun.service 2>/dev/null || true
     cleanup_rules
@@ -980,6 +1134,8 @@ install_tun() {
 
 cleanup_rules() {
   [ -x "$ROUTES_DOWN" ] && "$ROUTES_DOWN" >/dev/null 2>&1 || true
+  fallback_cleanup_rules
+  restore_managed_files_fallback
 }
 
 restart_getout() {
@@ -1003,6 +1159,7 @@ restart_getout() {
     mode="$(current_mode)"
     [ "$mode" = "v4" ] || [ "$mode" = "dual" ] || mode="v4"
     if [ -f "$CLIENT_CONF" ]; then
+      assert_private_config "$CLIENT_CONF"
       # shellcheck disable=SC1090
       . "$CLIENT_CONF"
       address="${SOCKS_ADDRESS:-}"
@@ -1014,6 +1171,7 @@ restart_getout() {
       write_tun_config
       write_routes_scripts
       write_tun_service "$mode"
+      preflight_tun_runtime
     fi
     cleanup_rules
     warn_ssh_protection_status
@@ -1082,6 +1240,7 @@ status() {
   echo
   echo "入口信息:"
   if [ -f "$SERVER_CONF" ]; then
+    assert_private_config "$SERVER_CONF"
     # shellcheck disable=SC1090
     . "$SERVER_CONF"
     echo "监听端口: ${PORT:-}"
@@ -1099,6 +1258,7 @@ status() {
   echo
   echo "出口信息:"
   if [ -f "$CLIENT_CONF" ]; then
+    assert_private_config "$CLIENT_CONF"
     # shellcheck disable=SC1090
     . "$CLIENT_CONF"
     echo "SOCKS5: [${SOCKS_ADDRESS:-}]:${SOCKS_PORT:-}"

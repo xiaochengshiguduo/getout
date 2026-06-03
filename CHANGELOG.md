@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.7
+
+- 改进运行期 DNS 和 `/etc/gai.conf` 的备份/恢复保护，增加 getout 管理标记；原始备份缺失时不再盲目覆盖未知 DNS。
+- nftables/conntrack 入站回包保护改为显式校验，失败时阻止出口模式继续启动，避免保护未生效却静默运行。
+- `cleanup_rules` 增加内置兜底清理，即使 `routes-down.sh` 缺失或损坏，也会尝试清理 getout 相关 fwmark、table 20、nft 表和旧版 SSH 规则。
+- 出口模式启动、重启、修改出口信息、切换 V4/V6 优先模式前增加 runtime 预检，校验 tun2socks、路由脚本和 nft 可用性。
+- `getout update` 在服务运行中时支持交互确认后立即重启，使服务文件和路由脚本刷新生效。
+- source 配置文件前增加 root 拥有且 group/other 不可写校验，降低配置文件权限回退后的风险。
+
 ## 0.1.6
 
 - 入口模式强制启用用户名密码，避免误配置为公网开放代理。
