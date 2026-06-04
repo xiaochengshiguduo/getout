@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.2.1"
+SCRIPT_VERSION="0.2.2"
 INSTALL_PATH="/usr/local/bin/getout"
 UPDATE_URL="https://raw.githubusercontent.com/xiaochengshiguduo/getout/main/getout.sh"
 UPDATE_SHA256_URL="https://raw.githubusercontent.com/xiaochengshiguduo/getout/main/getout.sh.sha256"
@@ -1098,7 +1098,7 @@ prompt_server_info() {
   user=""; pass=""
   read -rp "用户名: " user
   [ -n "$user" ] || fatal "用户名不能为空。"
-  read -rsp "密码: " pass; echo
+  read -rp "密码: " pass
   [ -n "$pass" ] || fatal "密码不能为空。"
   reject_url_unsafe "用户名" "$user"
   reject_url_unsafe "密码" "$pass"
@@ -1274,10 +1274,10 @@ ask_socks_config() {
   read -rp "请输入 SOCKS5 服务器端口 [默认: 1080]: " port
   port="${port:-1080}"
   [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || fatal "端口无效：$port"
-  read -rp "用户名 [可留空]: " username
+  read -rp "上游 SOCKS5 用户名 [无认证可留空]: " username
   password=""
   if [ -n "$username" ]; then
-    read -rsp "密码: " password; echo
+    read -rp "上游 SOCKS5 密码 [无认证可留空]: " password
     reject_url_unsafe "用户名" "$username"
     reject_url_unsafe "密码" "$password"
   fi

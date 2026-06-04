@@ -214,6 +214,13 @@ CASE
   pass 'entry daemon-reload failure rolls back server snapshot'
 }
 
+run_password_prompts_are_plaintext() {
+  ! grep -Eq 'read[[:space:]][^\n]*-[^\n]*s' "$SCRIPT"
+  grep -q '上游 SOCKS5 用户名 \[无认证可留空\]' "$SCRIPT"
+  grep -q '上游 SOCKS5 密码 \[无认证可留空\]' "$SCRIPT"
+  pass 'password prompts use plaintext input and outlet auth remains optional'
+}
+
 run_checksum_file_matches_script() {
   [ -f "$ROOT_DIR/getout.sh.sha256" ]
   (cd "$ROOT_DIR" && sha256sum -c getout.sh.sha256 >/dev/null)
@@ -248,5 +255,6 @@ run_runtime_restore_deletes_new_files
 run_preflight_failure_rolls_back
 run_daemon_reload_failure_rolls_back_runtime
 run_server_daemon_reload_failure_rolls_back
+run_password_prompts_are_plaintext
 run_checksum_file_matches_script
 run_checksum_verification

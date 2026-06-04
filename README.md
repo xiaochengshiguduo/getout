@@ -291,11 +291,11 @@ tests/run.sh
 - 入口模式必须设置用户名密码；用户名和密码不能包含空白字符或 URL 保留字符。
 - `ping`/ICMP 不经过 SOCKS 出口代理，出口连通性请优先用 TCP/UDP 应用测试。
 - 请确保 VPS 面板已开启 TUN。
-- 状态页会明文显示入口/出口密码，请只在可信终端使用。
+- 交互录入和状态页都会明文显示入口/出口密码，请只在可信终端使用。
 
 ## 已知限制与排障
 
-- `status` 会明文显示入口/出口密码，这是为了在可信终端快速核对配置；不要把状态页截图或日志发到公开场所。
+- 交互录入和 `status` 会明文显示入口/出口密码，这是为了在可信终端快速核对配置；不要把状态页截图或日志发到公开场所。
 - `ping`/ICMP 不经过 SOCKS 出口代理，排障时请优先使用 `curl` 或真实应用连接测试。
 - `/etc/resolv.conf` 若由 systemd-resolved、NetworkManager、VPS 面板等外部组件并发管理，getout 会尽量保留外部修改并报警；遇到 DNS 异常时先检查 `/etc/getout/resolv.conf.*` 和当前 `/etc/resolv.conf`。
 - 出口模式依赖 TUN、nftables、conntrack/fib 规则能力；如果 `getout doctor` 或启动 preflight 失败，请先按错误提示处理内核/系统能力问题。
