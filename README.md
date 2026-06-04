@@ -57,6 +57,7 @@ getout status
 getout stop
 getout restart
 getout update
+getout doctor
 getout uninstall
 ```
 
@@ -201,6 +202,44 @@ getout restart
 
 这样可以刷新 systemd 服务文件、`routes-up.sh` 和 `routes-down.sh`。如果跳过自动重启，请稍后手动执行 `getout restart`。
 
+### 更新完整性校验
+
+`getout update` 会优先尝试下载同源 `getout.sh.sha256` 并校验下载到的新脚本。如果发布源没有提供该文件，会给出警告并跳过完整性校验，保持一键安装/更新可用。
+
+也可以手动指定期望 SHA256：
+
+```bash
+GETOUT_UPDATE_SHA256=<sha256> getout update
+```
+
+或指定自定义 checksum 地址：
+
+```bash
+GETOUT_UPDATE_SHA256_URL=https://example.com/getout.sh.sha256 getout update
+```
+
+注意：当前实现是 SHA256 完整性校验，不是 GPG/minisign 强签名校验。强签名需要额外发布公钥和签名文件。
+
+## 环境诊断
+
+```bash
+getout doctor
+```
+
+也可以使用同义命令：
+
+```bash
+getout check
+```
+
+`doctor` 会检查：
+
+- root 权限、Debian、systemd、TUN、iproute2、nftables、curl、sha256sum；
+- `/etc/getout` 和配置文件权限；
+- 入口/出口二进制和 systemd unit 是否存在；
+- 生成的路由脚本语法；
+- 当前为出口模式时执行出口 runtime preflight。
+
 ## 卸载
 
 ```bash
@@ -217,6 +256,23 @@ getout uninstall
 - 禁用 systemd 自启动；
 - 删除配置、全局命令、二进制和 systemd unit。
 
+## 测试
+
+仓库内置轻量 Bash 测试：
+
+```bash
+tests/run.sh
+```
+
+测试覆盖：
+
+- `getout.sh` 语法；
+- 生成的 `routes-up.sh` / `routes-down.sh` 语法；
+- 出口 runtime 快照恢复，包括删除 preflight 前不存在、失败后新生成的文件；
+- 出口 preflight 失败回滚；
+- `systemctl daemon-reload` 在出口/入口模式写 service 后失败时的回滚；
+- 更新 SHA256 校验成功/失败路径。
+
 ## 注意事项
 
 - 仅支持 Debian。
@@ -230,6 +286,15 @@ getout uninstall
 - `ping`/ICMP 不经过 SOCKS 出口代理，出口连通性请优先用 TCP/UDP 应用测试。
 - 请确保 VPS 面板已开启 TUN。
 - 状态页会明文显示入口/出口密码，请只在可信终端使用。
+
+## 已知限制与排障
+
+- `status` 会明文显示入口/出口密码，这是为了在可信终端快速核对配置；不要把状态页截图或日志发到公开场所。
+- `ping`/ICMP 不经过 SOCKS 出口代理，排障时请优先使用 `curl` 或真实应用连接测试。
+- `/etc/resolv.conf` 若由 systemd-resolved、NetworkManager、VPS 面板等外部组件并发管理，getout 会尽量保留外部修改并报警；遇到 DNS 异常时先检查 `/etc/getout/resolv.conf.*` 和当前 `/etc/resolv.conf`。
+- 出口模式依赖 TUN、nftables、conntrack/fib 规则能力；如果 `getout doctor` 或启动 preflight 失败，请先按错误提示处理内核/系统能力问题。
+- 更新后如果服务正在运行，建议执行 `getout restart`，让 systemd unit 和路由脚本刷新到最新版本。
+- 当前 SHA256 是完整性校验，不是强签名；如果需要更强供应链保护，请使用可信网络、固定 SHA256，或后续接入 GPG/minisign 签名发布。
 
 ## 已测试环境
 

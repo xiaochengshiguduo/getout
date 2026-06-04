@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0
+
+- 新增 `tests/run.sh`，固化语法、路由脚本生成、出口回滚、入口回滚和更新校验的轻量测试。
+- 入口模式增加 server 快照和回滚保护，`systemctl daemon-reload` 或启动失败时会恢复旧入口配置、旧 systemd 文件和模式文件。
+- 新增 `getout doctor` / `getout check` 环境诊断命令，检查系统能力、配置权限、服务文件、路由脚本语法和出口 runtime preflight。
+- 更新/安装流程增加可选 SHA256 完整性校验，支持同源 `getout.sh.sha256`、`GETOUT_UPDATE_SHA256` 和 `GETOUT_UPDATE_SHA256_URL`。
+- README 增加测试说明、环境诊断、更新完整性校验和已知限制/排障章节。
+
 ## 0.1.9
 
 - 修复出口模式 preflight 失败时不会恢复刚写入运行文件的问题，启动、修改出口、切换优先级和重启出口模式都会先回滚旧配置再退出。

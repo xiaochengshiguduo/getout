@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.1.9"
+SCRIPT_VERSION="0.2.0"
 INSTALL_PATH="/usr/local/bin/getout"
 UPDATE_URL="https://raw.githubusercontent.com/xiaochengshiguduo/getout/main/getout.sh"
+UPDATE_SHA256_URL="https://raw.githubusercontent.com/xiaochengshiguduo/getout/main/getout.sh.sha256"
 export DEBIAN_FRONTEND=noninteractive
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'
@@ -68,6 +69,37 @@ extract_script_version() {
   sed -n 's/^SCRIPT_VERSION="\([^"]\+\)".*/\1/p' "$1" | head -n1
 }
 
+download_to_file() {
+  local url="$1" output="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --connect-timeout 20 --retry 2 --retry-delay 1 "$url" -o "$output"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$output" "$url"
+  else
+    return 127
+  fi
+}
+
+verify_update_checksum() {
+  local file="$1" expected="${GETOUT_UPDATE_SHA256:-}" checksum tmp_hash hash_url sep
+  if [ -z "$expected" ]; then
+    tmp_hash="$(mktemp)"
+    hash_url="${GETOUT_UPDATE_SHA256_URL:-$UPDATE_SHA256_URL}"
+    if [[ "$hash_url" == http://* || "$hash_url" == https://* ]]; then
+      sep="?"; [[ "$hash_url" == *\?* ]] && sep="&"
+      hash_url="${hash_url}${sep}v=${SCRIPT_VERSION}&t=$(date +%s)"
+    fi
+    if download_to_file "$hash_url" "$tmp_hash" 2>/dev/null; then
+      expected="$(awk 'NF {print $1; exit}' "$tmp_hash" 2>/dev/null || true)"
+    fi
+    rm -f "$tmp_hash" 2>/dev/null || true
+  fi
+  [ -n "$expected" ] || { warn "未找到 getout.sh.sha256，已跳过更新完整性校验。"; return 0; }
+  command -v sha256sum >/dev/null 2>&1 || fatal "已提供 SHA256 校验值，但系统缺少 sha256sum。"
+  checksum="$(sha256sum "$file" | awk '{print $1}')"
+  [ "$checksum" = "$expected" ] || fatal "getout 下载文件 SHA256 校验失败，已取消安装/更新。"
+}
+
 install_from_update_url() {
   local mode="${1:-install}" tmp version download_url
   tmp="$(mktemp)"
@@ -78,15 +110,13 @@ install_from_update_url() {
   trap 'rm -f "$tmp"' RETURN EXIT
 
   rm -f "$tmp"
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsSL --connect-timeout 20 --retry 2 --retry-delay 1 "$download_url" -o "$tmp" || fatal "getout 下载失败。"
-  elif command -v wget >/dev/null 2>&1; then
-    wget -qO "$tmp" "$download_url" || fatal "getout 下载失败。"
-  else
-    fatal "未找到 curl 或 wget，无法下载安装 getout。"
+  if ! download_to_file "$download_url" "$tmp"; then
+    command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || fatal "未找到 curl 或 wget，无法下载安装 getout。"
+    fatal "getout 下载失败。"
   fi
 
   [ -s "$tmp" ] || fatal "getout 下载结果为空。"
+  verify_update_checksum "$tmp"
   bash -n "$tmp" || fatal "getout 语法校验失败，已取消安装。"
   grep -q 'getout 管理面板' "$tmp" || fatal "getout 特征校验失败，已取消安装。"
   grep -q '^SCRIPT_VERSION=' "$tmp" || fatal "getout 版本校验失败，已取消安装。"
@@ -235,10 +265,37 @@ snapshot_runtime_files() {
   echo "$dir"
 }
 
+snapshot_server_files() {
+  local dir file
+  dir="$(mktemp -d)" || fatal "创建入口回滚快照失败。"
+  for file in "$SERVER_CONF" "$GOST_SERVICE" "$MODE_FILE"; do
+    touch "$dir/$(basename "$file").missing" 2>/dev/null || true
+    if [ -e "$file" ]; then
+      cp -a "$file" "$dir/$(basename "$file")" 2>/dev/null || true
+      rm -f "$dir/$(basename "$file").missing" 2>/dev/null || true
+    fi
+  done
+  echo "$dir"
+}
+
 restore_runtime_files() {
   local dir="$1" file base
   [ -d "$dir" ] || return 0
   for file in "$CLIENT_CONF" "$TUN_CONF" "$ROUTES_UP" "$ROUTES_DOWN" "$TUN_SERVICE" "$MODE_FILE"; do
+    base="$(basename "$file")"
+    if [ -e "$dir/$base" ]; then
+      cp -a "$dir/$base" "$file" 2>/dev/null || true
+    elif [ -e "$dir/$base.missing" ]; then
+      rm -f "$file" 2>/dev/null || true
+    fi
+  done
+  systemctl daemon-reload 2>/dev/null || true
+}
+
+restore_server_files() {
+  local dir="$1" file base
+  [ -d "$dir" ] || return 0
+  for file in "$SERVER_CONF" "$GOST_SERVICE" "$MODE_FILE"; do
     base="$(basename "$file")"
     if [ -e "$dir/$base" ]; then
       cp -a "$dir/$base" "$file" 2>/dev/null || true
@@ -254,16 +311,24 @@ remove_runtime_snapshot() {
 }
 
 RUNTIME_ROLLBACK_SNAPSHOT=""
+RUNTIME_ROLLBACK_RESTORE="restore_runtime_or_warn"
 
 runtime_rollback_on_exit() {
   local snapshot="${RUNTIME_ROLLBACK_SNAPSHOT:-}"
   [ -n "$snapshot" ] || return 0
   RUNTIME_ROLLBACK_SNAPSHOT=""
-  restore_runtime_or_warn "$snapshot"
+  "${RUNTIME_ROLLBACK_RESTORE:-restore_runtime_or_warn}" "$snapshot"
 }
 
 begin_runtime_rollback() {
   RUNTIME_ROLLBACK_SNAPSHOT="$1"
+  RUNTIME_ROLLBACK_RESTORE="restore_runtime_or_warn"
+  trap runtime_rollback_on_exit EXIT
+}
+
+begin_server_rollback() {
+  RUNTIME_ROLLBACK_SNAPSHOT="$1"
+  RUNTIME_ROLLBACK_RESTORE="restore_server_or_warn"
   trap runtime_rollback_on_exit EXIT
 }
 
@@ -564,6 +629,15 @@ restore_runtime_or_warn() {
   warn "启动失败，已尝试恢复旧配置和旧 systemd 文件。"
 }
 
+restore_server_or_warn() {
+  local snapshot="$1"
+  RUNTIME_ROLLBACK_SNAPSHOT=""
+  trap - EXIT
+  restore_server_files "$snapshot"
+  remove_runtime_snapshot "$snapshot"
+  warn "入口模式启动失败，已尝试恢复旧入口配置和旧 systemd 文件。"
+}
+
 preflight_tun_runtime_with_rollback() {
   local snapshot="$1"
   preflight_tun_runtime || {
@@ -584,6 +658,22 @@ restart_tun_with_rollback() {
     restore_runtime_or_warn "$snapshot"
     systemctl restart getout-tun.service 2>/dev/null || true
     fatal "getout-tun.service 启动失败，请查看：journalctl -u getout-tun.service -e"
+  fi
+  clear_runtime_rollback "$snapshot"
+}
+
+restart_gost_with_rollback() {
+  local snapshot="$1" action="${2:-restart}"
+  if [ "$action" = "enable" ]; then
+    systemctl enable --now getout-gost.service
+  else
+    systemctl restart getout-gost.service
+  fi
+  sleep 1
+  if ! systemctl is-active --quiet getout-gost.service; then
+    restore_server_or_warn "$snapshot"
+    systemctl restart getout-gost.service 2>/dev/null || true
+    fatal "getout-gost.service 启动失败，请查看：journalctl -u getout-gost.service -e"
   fi
   clear_runtime_rollback "$snapshot"
 }
@@ -1014,23 +1104,24 @@ EOF
 }
 
 start_server() {
+  local snapshot
   require_root; require_debian; install_deps
   ensure_conf_dir
+  snapshot="$(snapshot_server_files)"
+  begin_server_rollback "$snapshot"
   stop_client_keep_config
   [ -x "$GOST_BIN" ] || download_gost
   [ -f "$SERVER_CONF" ] || prompt_server_info
   write_gost_service
   echo "server" > "$MODE_FILE"
   chmod_private_file "$MODE_FILE"
-  systemctl enable --now getout-gost.service
+  restart_gost_with_rollback "$snapshot" enable
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
     assert_private_config "$SERVER_CONF"
     # shellcheck disable=SC1090
     . "$SERVER_CONF"
     ufw allow "${PORT}/tcp" >/dev/null || true
   fi
-  sleep 1
-  systemctl is-active --quiet getout-gost.service || fatal "getout-gost.service 启动失败，请查看：journalctl -u getout-gost.service -e"
   success "入口模式已启动。"
   status
 }
@@ -1042,17 +1133,21 @@ stop_server() {
 }
 
 configure_server() {
+  local snapshot was_active
+  was_active=0; server_active && was_active=1
+  ensure_conf_dir
+  snapshot="$(snapshot_server_files)"
+  begin_server_rollback "$snapshot"
   prompt_server_info
   [ -x "$GOST_BIN" ] || download_gost
   write_gost_service
-  if server_active; then
-    systemctl restart getout-gost.service
+  if [ "$was_active" = "1" ]; then
+    restart_gost_with_rollback "$snapshot" restart
     systemctl enable getout-gost.service >/dev/null 2>&1 || true
-    sleep 1
-    systemctl is-active --quiet getout-gost.service || fatal "getout-gost.service 重启失败，请查看：journalctl -u getout-gost.service -e"
     success "入口信息已更新并立即应用。"
     status
   else
+    clear_runtime_rollback "$snapshot"
     success "入口信息已保存，启动入口模式后生效。"
     if tun_active; then
       warn "当前出口模式正在运行，入口信息不会影响当前出口模式。"
@@ -1362,17 +1457,18 @@ cleanup_rules() {
 restart_getout() {
   require_root
   if server_active; then
+    local snapshot
     ensure_conf_dir
+    snapshot="$(snapshot_server_files)"
+    begin_server_rollback "$snapshot"
     [ -f "$SERVER_CONF" ] || fatal "未找到入口配置，请先修改入口信息。"
     chmod_private_file "$SERVER_CONF"
     write_gost_service
     echo "server" > "$MODE_FILE"
     chmod_private_file "$MODE_FILE"
-    systemctl restart getout-gost.service
+    restart_gost_with_rollback "$snapshot" restart
     systemctl enable getout-gost.service >/dev/null 2>&1 || true
     systemctl disable getout-tun.service >/dev/null 2>&1 || true
-    sleep 1
-    systemctl is-active --quiet getout-gost.service || fatal "getout-gost.service 重启失败，请查看：journalctl -u getout-gost.service -e"
     success "入口模式已重启。"
     status
   elif tun_active; then
@@ -1500,6 +1596,74 @@ status() {
   echo -n "IPv6: "; curl -6 -s --connect-timeout 8 --max-time 12 https://api64.ipify.org || curl -6 -s --connect-timeout 8 --max-time 12 http://v6.ident.me || echo -n "失败"; echo
 }
 
+doctor_check() {
+  local failed=0 mode
+  mode="$(current_mode)"
+  echo -e "${CYAN}========== getout doctor ==========${NC}"
+  echo "版本: $SCRIPT_VERSION"
+  echo
+
+  check_ok() { echo -e "${GREEN}[OK]${NC} $*"; }
+  check_warn() { echo -e "${YELLOW}[警告]${NC} $*"; }
+  check_fail() { echo -e "${RED}[错误]${NC} $*"; failed=1; }
+
+  [ "${EUID:-$(id -u)}" -eq 0 ] && check_ok "root 权限" || check_fail "请使用 root 权限运行 doctor。"
+  if [ -r /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    [ "${ID:-}" = "debian" ] && check_ok "Debian 系统：${PRETTY_NAME:-debian}" || check_fail "当前系统不是 Debian：${PRETTY_NAME:-unknown}"
+  else
+    check_fail "无法读取 /etc/os-release。"
+  fi
+  [ -c /dev/net/tun ] && check_ok "/dev/net/tun 可用" || check_fail "未检测到 /dev/net/tun。"
+  command -v systemctl >/dev/null 2>&1 && check_ok "systemd/systemctl 可用" || check_fail "未找到 systemctl。"
+  command -v nft >/dev/null 2>&1 && check_ok "nftables 可用" || check_fail "未找到 nft。"
+  command -v ip >/dev/null 2>&1 && check_ok "iproute2 可用" || check_fail "未找到 ip 命令。"
+  command -v curl >/dev/null 2>&1 && check_ok "curl 可用" || check_warn "未找到 curl，下载/状态测试可能受影响。"
+  command -v sha256sum >/dev/null 2>&1 && check_ok "sha256sum 可用" || check_warn "缺少 sha256sum，无法做更新完整性校验。"
+
+  if [ -d "$CONF_DIR" ]; then
+    check_ok "配置目录存在：$CONF_DIR"
+    find "$CONF_DIR" -maxdepth 0 -type d -user root ! -perm /077 | grep -q . && check_ok "配置目录权限安全" || check_fail "配置目录权限不安全，应为 root 且 group/other 不可访问。"
+  else
+    check_warn "配置目录不存在：$CONF_DIR"
+  fi
+
+  if [ -f "$SERVER_CONF" ]; then
+    find "$SERVER_CONF" -maxdepth 0 -type f -user root ! -perm /022 | grep -q . && check_ok "入口配置权限安全" || check_fail "入口配置权限不安全。"
+  else
+    check_warn "入口配置不存在。"
+  fi
+  if [ -f "$CLIENT_CONF" ]; then
+    find "$CLIENT_CONF" -maxdepth 0 -type f -user root ! -perm /022 | grep -q . && check_ok "出口配置权限安全" || check_fail "出口配置权限不安全。"
+  else
+    check_warn "出口配置不存在。"
+  fi
+
+  [ -x "$GOST_BIN" ] && check_ok "入口二进制存在：$GOST_BIN" || check_warn "入口二进制不存在，启动入口模式时会下载。"
+  [ -x "$TUN_BIN" ] && check_ok "出口二进制存在：$TUN_BIN" || check_warn "出口二进制不存在，启动出口模式时会下载。"
+  [ -f "$GOST_SERVICE" ] && check_ok "入口 systemd unit 存在" || check_warn "入口 systemd unit 不存在。"
+  [ -f "$TUN_SERVICE" ] && check_ok "出口 systemd unit 存在" || check_warn "出口 systemd unit 不存在。"
+
+  if [ -f "$ROUTES_UP" ] && [ -f "$ROUTES_DOWN" ]; then
+    bash -n "$ROUTES_UP" && bash -n "$ROUTES_DOWN" && check_ok "路由脚本语法正常" || check_fail "路由脚本语法异常。"
+  else
+    check_warn "路由脚本不存在，启动出口模式时会生成。"
+  fi
+
+  if [ "$mode" = "v4" ] || [ "$mode" = "dual" ]; then
+    preflight_tun_runtime && check_ok "出口 runtime preflight 通过" || check_fail "出口 runtime preflight 失败。"
+  else
+    check_warn "当前不是出口模式，跳过出口 runtime preflight。"
+  fi
+
+  if [ "$failed" = "0" ]; then
+    success "doctor 检查完成，未发现阻塞问题。"
+  else
+    fatal "doctor 检查发现阻塞问题，请按上方错误处理。"
+  fi
+}
+
 menu_action_label() {
   local type="$1" mode="$(current_mode)"
   case "$type" in
@@ -1525,11 +1689,12 @@ menu() {
   echo "6.$(priority_action_label)"
   echo "7.重启 getout"
   echo "8.查看状态"
-  echo "9.更新 getout"
-  echo "10.卸载 getout"
-  echo "11.退出"
+  echo "9.环境诊断"
+  echo "10.更新 getout"
+  echo "11.卸载 getout"
+  echo "12.退出"
   echo
-  read -rp "请选择 [1-11]: " choice
+  read -rp "请选择 [1-12]: " choice
   case "$choice" in
     1) if server_active; then stop_server; else start_server; fi ;;
     2) configure_server ;;
@@ -1539,16 +1704,17 @@ menu() {
     6) switch_priority_mode ;;
     7) restart_getout ;;
     8) status ;;
-    9) update_getout ;;
-    10) read -rp "确认卸载 getout? [y/N]: " yn; [[ "$yn" =~ ^[Yy]$ ]] && uninstall_all || echo "已取消" ;;
-    11) exit 0 ;;
+    9) doctor_check ;;
+    10) update_getout ;;
+    11) read -rp "确认卸载 getout? [y/N]: " yn; [[ "$yn" =~ ^[Yy]$ ]] && uninstall_all || echo "已取消" ;;
+    12) exit 0 ;;
     *) fatal "无效选项。" ;;
   esac
 }
 
 usage() {
   cat <<EOF
-用法：getout [server|v4|dual|stop|restart|status|update|uninstall]
+用法：getout [server|v4|dual|stop|restart|status|doctor|check|update|uninstall]
 
 server     启动入口模式，复用已有入口配置；没有配置时询问
 v4         启动 V4 单栈出口模式，复用已有出口配置；没有配置时询问
@@ -1556,6 +1722,8 @@ dual       启动 V4+V6 双栈出口模式，复用已有出口配置；没有�
 stop       关闭当前运行中的 getout 模式，并关闭对应自启动
 restart    重启当前运行中的 getout 模式
 status     查看状态
+doctor     检查系统环境、配置权限、服务文件和出口预检
+check      同 doctor
 update     更新 getout
 uninstall  卸载并清理 getout
 EOF
@@ -1581,7 +1749,7 @@ main() {
     *) secure_existing_files ;;
   esac
   case "${1:-}" in
-    uninstall|remove|un|-h|--help|help) ;;
+    uninstall|remove|un|doctor|check|-h|--help|help) ;;
     *) ensure_global_command ;;
   esac
 
@@ -1592,6 +1760,7 @@ main() {
     stop) stop_current ;;
     restart) restart_getout ;;
     status) status ;;
+    doctor|check) doctor_check ;;
     update) update_getout ;;
     uninstall|remove|un) uninstall_all ;;
     -h|--help|help) usage ;;
