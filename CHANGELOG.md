@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.0
+
+- 调整交互管理面板顺序：`查看状态` 移到第 7 项，`重启 getout` 移到第 8 项。
+- 管理面板移除 `环境诊断` 入口，`getout doctor` / `getout check` 命令仍然保留。
+
 ## 0.3.3
 
 - 第三方二进制下载增加固定 SHA256 完整性校验，覆盖 `gost v2.11.5` 和 `hev-socks5-tunnel 2.15.0` 当前支持的 Linux 架构。

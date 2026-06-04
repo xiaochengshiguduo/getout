@@ -261,6 +261,20 @@ run_password_prompts_are_plaintext() {
   pass 'password prompts use plaintext input and outlet auth remains optional'
 }
 
+run_menu_order_matches_readme() {
+  local status_line restart_line update_line uninstall_line exit_line
+  status_line="$(grep -n 'echo "7\.查看状态"' "$SCRIPT" | head -n1 | cut -d: -f1)"
+  restart_line="$(grep -n 'echo "8\.重启 getout"' "$SCRIPT" | head -n1 | cut -d: -f1)"
+  update_line="$(grep -n 'echo "9\.更新 getout"' "$SCRIPT" | head -n1 | cut -d: -f1)"
+  uninstall_line="$(grep -n 'echo "10\.卸载 getout"' "$SCRIPT" | head -n1 | cut -d: -f1)"
+  exit_line="$(grep -n 'echo "11\.退出"' "$SCRIPT" | head -n1 | cut -d: -f1)"
+  [ -n "$status_line" ] && [ -n "$restart_line" ] && [ -n "$update_line" ] && [ -n "$uninstall_line" ] && [ -n "$exit_line" ]
+  [ "$status_line" -lt "$restart_line" ] && [ "$restart_line" -lt "$update_line" ] && [ "$update_line" -lt "$uninstall_line" ] && [ "$uninstall_line" -lt "$exit_line" ]
+  grep -q '请选择 \[1-11\]' "$SCRIPT"
+  ! grep -q 'echo "9\.环境诊断"' "$SCRIPT"
+  pass 'menu order matches documented release menu'
+}
+
 run_checksum_file_matches_script() {
   [ -f "$ROOT_DIR/getout.sh.sha256" ]
   (cd "$ROOT_DIR" && sha256sum -c getout.sh.sha256 >/dev/null)
@@ -323,6 +337,7 @@ run_daemon_reload_failure_rolls_back_runtime
 run_server_daemon_reload_failure_rolls_back
 run_stop_cleanup_order_protects_control_plane
 run_password_prompts_are_plaintext
+run_menu_order_matches_readme
 run_checksum_file_matches_script
 run_checksum_verification
 run_binary_checksum_verification

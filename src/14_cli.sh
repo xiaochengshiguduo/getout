@@ -23,14 +23,13 @@ menu() {
   echo "4.$(menu_action_label dual)"
   echo "5.修改出口信息"
   echo "6.$(priority_action_label)"
-  echo "7.重启 getout"
-  echo "8.查看状态"
-  echo "9.环境诊断"
-  echo "10.更新 getout"
-  echo "11.卸载 getout"
-  echo "12.退出"
+  echo "7.查看状态"
+  echo "8.重启 getout"
+  echo "9.更新 getout"
+  echo "10.卸载 getout"
+  echo "11.退出"
   echo
-  read -rp "请选择 [1-12]: " choice
+  read -rp "请选择 [1-11]: " choice
   case "$choice" in
     1) if server_active; then stop_server; else start_server; fi ;;
     2) configure_server ;;
@@ -38,12 +37,11 @@ menu() {
     4) if client_mode_active dual; then stop_client; else start_client dual; fi ;;
     5) configure_client ;;
     6) switch_priority_mode ;;
-    7) restart_getout ;;
-    8) status ;;
-    9) doctor_check ;;
-    10) update_getout ;;
-    11) read -rp "确认卸载 getout? [y/N]: " yn; [[ "$yn" =~ ^[Yy]$ ]] && uninstall_all || echo "已取消" ;;
-    12) exit 0 ;;
+    7) status ;;
+    8) restart_getout ;;
+    9) update_getout ;;
+    10) read -rp "确认卸载 getout? [y/N]: " yn; [[ "$yn" =~ ^[Yy]$ ]] && uninstall_all || echo "已取消" ;;
+    11) exit 0 ;;
     *) fatal "无效选项。" ;;
   esac
 }

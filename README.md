@@ -73,8 +73,8 @@ getout uninstall
 4.启动 V4+V6 双栈模式
 5.修改出口信息
 6.切换至 V4 优先模式
-7.重启 getout
-8.查看状态
+7.查看状态
+8.重启 getout
 9.更新 getout
 10.卸载 getout
 11.退出
