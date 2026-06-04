@@ -282,6 +282,8 @@ tests/run.sh
 ./build.sh
 ```
 
+生成的 `getout.sh` 顶部会带有 generated 提示；正常开发请修改 `src/*.sh` 后重新 build。
+
 模块职责、维护规则和验证门禁见 [`MAINTAINING.md`](MAINTAINING.md)。
 
 ## 注意事项

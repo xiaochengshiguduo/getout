@@ -4,6 +4,8 @@
 
 Development sources now live in `src/*.sh`. Run `./build.sh` to concatenate them into `getout.sh` and regenerate `getout.sh.sha256`.
 
+`getout.sh` contains a generated-file notice near the top. Do not edit that release artifact directly during normal development.
+
 ## Source layout
 
 ```text
@@ -53,6 +55,7 @@ tests/
 - Edit `src/*.sh`, not `getout.sh`, unless you are intentionally debugging generated output.
 - Run `./build.sh` after changing `src/*.sh`.
 - Keep committing generated `getout.sh` and `getout.sh.sha256`; they are part of the release surface.
+- If you add, remove, or rename a source module, update the `modules=(...)` list in `build.sh`. The build fails when `src/*.sh` contains an unlisted module, a listed module is missing, or a module appears twice.
 - Do not change `status` plaintext password output unless the project owner explicitly changes that design decision.
 - Prefer adding tests in `tests/run.sh` before or with behavior changes.
 - Keep `getout.sh` single-file install/update behavior intact unless the install/update flow is explicitly redesigned.
