@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.2.0"
+SCRIPT_VERSION="0.2.1"
 INSTALL_PATH="/usr/local/bin/getout"
 UPDATE_URL="https://raw.githubusercontent.com/xiaochengshiguduo/getout/main/getout.sh"
 UPDATE_SHA256_URL="https://raw.githubusercontent.com/xiaochengshiguduo/getout/main/getout.sh.sha256"
@@ -48,11 +48,37 @@ DNS64_SERVERS=(
   "2001:67c:2960::6464"
 )
 
+# =============================================================================
+# Maintainer map
+# -----------------------------------------------------------------------------
+# getout is intentionally published as one self-contained script so raw GitHub
+# install/update and a single checksum artifact stay simple. Keep future changes
+# inside these sections; if a section grows large enough, split it in src/ during
+# development and generate this single-file release artifact from a build step.
+#
+# 00 constants / globals                 (above)
+# 01 logging helpers
+# 02 self install / update / checksum
+# 03 config permissions and file metadata
+# 04 runtime/server rollback snapshots
+# 05 host prerequisites and binary downloads
+# 06 encoding, address, and SSH helpers
+# 07 cleanup, preflight, and restart wrappers
+# 08 generated route scripts
+# 09 service state and entry/server mode
+# 10 outlet/client mode
+# 11 lifecycle, status, diagnostics, and CLI
+# =============================================================================
+
+# --- 01 logging helpers -------------------------------------------------------
+
 info() { echo -e "${BLUE}[信息]${NC} $*"; }
 success() { echo -e "${GREEN}[成功]${NC} $*"; }
 warn() { echo -e "${YELLOW}[警告]${NC} $*"; }
 err() { echo -e "${RED}[错误]${NC} $*" >&2; }
 fatal() { err "$*"; exit 1; }
+
+# --- 02 self install / update / checksum -------------------------------------
 
 running_from_install_path() {
   local src="${BASH_SOURCE[0]:-$0}" real_src real_install
@@ -156,6 +182,8 @@ update_getout() {
   fi
 }
 
+# --- 03 config permissions and file metadata ---------------------------------
+
 ensure_conf_dir() {
   mkdir -p "$CONF_DIR"
   chmod 700 "$CONF_DIR" 2>/dev/null || true
@@ -217,6 +245,8 @@ backup_path_preserve_symlink() {
   [ -n "$target_backup" ] && chmod_private_file "$target_backup"
   write_file_meta "$path" "$meta" "$backup"
 }
+
+# --- 04 runtime/server rollback snapshots ------------------------------------
 
 restore_path_from_backup() {
   local path="$1" backup="$2" meta="$3" marker="$4" label="$5" target_backup="${6:-}"
@@ -351,6 +381,8 @@ secure_existing_files() {
   [ -f "$ROUTES_DOWN" ] && chmod 700 "$ROUTES_DOWN" 2>/dev/null || true
 }
 
+# --- 05 host prerequisites and binary downloads ------------------------------
+
 require_root() {
   [ "${EUID:-$(id -u)}" -eq 0 ] || fatal "请使用 root 权限运行：sudo bash $0"
 }
@@ -470,6 +502,8 @@ download_hev() {
   trap - RETURN
 }
 
+# --- 06 encoding, address, and SSH helpers -----------------------------------
+
 is_ipv6() { [[ "$1" == *:* ]]; }
 is_ipv4() { [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; }
 
@@ -542,6 +576,8 @@ main_ipv4() {
 main_ipv6() {
   ip -6 route get 2606:4700:4700::1111 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}' || true
 }
+
+# --- 07 cleanup, preflight, and restart wrappers -----------------------------
 
 run_quiet() { "$@" 2>/dev/null || true; }
 run_all_quiet() { while "$@" 2>/dev/null; do :; done; }
@@ -677,6 +713,8 @@ restart_gost_with_rollback() {
   fi
   clear_runtime_rollback "$snapshot"
 }
+
+# --- 08 generated route scripts ----------------------------------------------
 
 write_routes_scripts() {
   ensure_conf_dir
@@ -1012,6 +1050,8 @@ EOF
   chmod 700 "$ROUTES_UP" "$ROUTES_DOWN" 2>/dev/null || true
 }
 
+# --- 09 service state and entry/server mode ----------------------------------
+
 service_active() {
   systemctl is-active --quiet "$1" 2>/dev/null
 }
@@ -1158,6 +1198,8 @@ configure_server() {
 install_server() {
   start_server
 }
+
+# --- 10 outlet/client mode ----------------------------------------------------
 
 current_priority_mode() {
   if [ -f "$CLIENT_CONF" ]; then
@@ -1447,6 +1489,8 @@ switch_priority_mode() {
 install_tun() {
   start_client "$1"
 }
+
+# --- 11 lifecycle, status, diagnostics, and CLI ------------------------------
 
 cleanup_rules() {
   [ -x "$ROUTES_DOWN" ] && "$ROUTES_DOWN" >/dev/null 2>&1 || true

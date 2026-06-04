@@ -273,6 +273,12 @@ tests/run.sh
 - `systemctl daemon-reload` 在出口/入口模式写 service 后失败时的回滚；
 - 更新 SHA256 校验成功/失败路径。
 
+## 维护结构
+
+`getout.sh` 仍然作为单文件发布，方便 raw GitHub 安装/更新、复制恢复和 SHA256 校验。为了降低单文件继续增长后的审查成本，脚本顶部有维护地图，内部按功能模块分区。
+
+维护规则和未来开发态拆模块方案见 [`MAINTAINING.md`](MAINTAINING.md)。
+
 ## 注意事项
 
 - 仅支持 Debian。
