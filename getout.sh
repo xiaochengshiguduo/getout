@@ -253,6 +253,27 @@ remove_runtime_snapshot() {
   [ -n "${1:-}" ] && rm -rf "$1" 2>/dev/null || true
 }
 
+RUNTIME_ROLLBACK_SNAPSHOT=""
+
+runtime_rollback_on_exit() {
+  local snapshot="${RUNTIME_ROLLBACK_SNAPSHOT:-}"
+  [ -n "$snapshot" ] || return 0
+  RUNTIME_ROLLBACK_SNAPSHOT=""
+  restore_runtime_or_warn "$snapshot"
+}
+
+begin_runtime_rollback() {
+  RUNTIME_ROLLBACK_SNAPSHOT="$1"
+  trap runtime_rollback_on_exit EXIT
+}
+
+clear_runtime_rollback() {
+  local snapshot="${1:-${RUNTIME_ROLLBACK_SNAPSHOT:-}}"
+  RUNTIME_ROLLBACK_SNAPSHOT=""
+  trap - EXIT
+  remove_runtime_snapshot "$snapshot"
+}
+
 secure_existing_files() {
   [ -d "$CONF_DIR" ] && chmod 700 "$CONF_DIR" 2>/dev/null || true
   chmod_private_file "$SERVER_CONF"
@@ -536,6 +557,8 @@ preflight_tun_runtime() {
 
 restore_runtime_or_warn() {
   local snapshot="$1"
+  RUNTIME_ROLLBACK_SNAPSHOT=""
+  trap - EXIT
   restore_runtime_files "$snapshot"
   remove_runtime_snapshot "$snapshot"
   warn "启动失败，已尝试恢复旧配置和旧 systemd 文件。"
@@ -562,7 +585,7 @@ restart_tun_with_rollback() {
     systemctl restart getout-tun.service 2>/dev/null || true
     fatal "getout-tun.service 启动失败，请查看：journalctl -u getout-tun.service -e"
   fi
-  remove_runtime_snapshot "$snapshot"
+  clear_runtime_rollback "$snapshot"
 }
 
 write_routes_scripts() {
@@ -1204,6 +1227,7 @@ start_client() {
   require_root; require_debian; install_deps; ensure_tun
   ensure_conf_dir
   snapshot="$(snapshot_runtime_files)"
+  begin_runtime_rollback "$snapshot"
   stop_server_keep_config
   if tun_active; then
     systemctl stop getout-tun.service 2>/dev/null || true
@@ -1242,6 +1266,7 @@ configure_client() {
   local mode snapshot was_active
   was_active=0; tun_active && was_active=1
   snapshot="$(snapshot_runtime_files)"
+  begin_runtime_rollback "$snapshot"
   if tun_active; then
     mode="$(current_mode)"
     [ "$mode" = "v4" ] || [ "$mode" = "dual" ] || mode="v4"
@@ -1269,7 +1294,7 @@ configure_client() {
     success "出口信息已更新并立即应用。"
     status
   else
-    remove_runtime_snapshot "$snapshot"
+    clear_runtime_rollback "$snapshot"
     success "出口信息已保存，启动 V4/双栈模式后生效。"
     if server_active; then
       warn "当前入口模式正在运行，出口信息不会影响当前入口模式。"
@@ -1290,6 +1315,7 @@ switch_priority_mode() {
   local mode address port username password priority_mode snapshot was_active
   was_active=0; tun_active && was_active=1
   snapshot="$(snapshot_runtime_files)"
+  begin_runtime_rollback "$snapshot"
   assert_private_config "$CLIENT_CONF"
   # shellcheck disable=SC1090
   . "$CLIENT_CONF"
@@ -1314,7 +1340,7 @@ switch_priority_mode() {
     warn_ssh_protection_status
     restart_tun_with_rollback "$snapshot" enable
   else
-    remove_runtime_snapshot "$snapshot"
+    clear_runtime_rollback "$snapshot"
   fi
   case "$priority_mode" in
     v4) success "已切换至 V4 优先模式。" ;;
@@ -1352,6 +1378,7 @@ restart_getout() {
   elif tun_active; then
     local mode address port username password priority_mode snapshot
     snapshot="$(snapshot_runtime_files)"
+    begin_runtime_rollback "$snapshot"
     mode="$(current_mode)"
     [ "$mode" = "v4" ] || [ "$mode" = "dual" ] || mode="v4"
     if [ -f "$CLIENT_CONF" ]; then
