@@ -312,6 +312,7 @@ tests/run.sh
 ## 已测试环境
 
 - Debian GNU/Linux 11 bullseye
+- Debian GNU/Linux 13 trixie
 - x86_64
 - IPv6 VPS
 - IPv4 VPS
