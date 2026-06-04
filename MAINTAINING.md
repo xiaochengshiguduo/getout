@@ -1,57 +1,72 @@
 # Maintaining getout
 
-`getout.sh` is intentionally released as a single self-contained script. This keeps raw GitHub install/update, copy-paste recovery, and `getout.sh.sha256` simple.
+`getout.sh` is still the release artifact: one self-contained script for raw GitHub install/update, copy-paste recovery, and `getout.sh.sha256` verification.
 
-To keep the single file reviewable, maintain changes inside the section map at the top of `getout.sh`:
+Development sources now live in `src/*.sh`. Run `./build.sh` to concatenate them into `getout.sh` and regenerate `getout.sh.sha256`.
 
-1. constants / globals
-2. logging helpers
-3. self install / update / checksum
-4. config permissions and file metadata
-5. runtime/server rollback snapshots
-6. host prerequisites and binary downloads
-7. encoding, address, and SSH helpers
-8. cleanup, preflight, and restart wrappers
-9. generated route scripts
-10. service state and entry/server mode
-11. outlet/client mode
-12. lifecycle, status, diagnostics, and CLI
+## Source layout
+
+```text
+src/
+  00_prelude.sh
+  01_constants.sh
+  02_logging.sh
+  03_update.sh
+  04_config.sh
+  05_resolver.sh
+  06_rollback.sh
+  07_deps_downloads.sh
+  08_helpers.sh
+  09_runtime_safety.sh
+  10_route_scripts.sh
+  11_server.sh
+  12_client.sh
+  13_lifecycle_status_doctor.sh
+  14_cli.sh
+
+build.sh
+getout.sh
+getout.sh.sha256
+tests/
+```
+
+## Module responsibilities
+
+- `00_prelude.sh`: shebang and shell options.
+- `01_constants.sh`: version, paths, URLs, DNS lists, routing marks, service names, and the release maintainer map.
+- `02_logging.sh`: log/fatal helpers.
+- `03_update.sh`: self-install, update, downloads used by update, and SHA256 verification.
+- `04_config.sh`: config directory setup, private file permissions, safe config checks, and file metadata helpers.
+- `05_resolver.sh`: managed resolver/gai restore helpers and conflict handling.
+- `06_rollback.sh`: runtime/server snapshots and rollback trap guard.
+- `07_deps_downloads.sh`: Debian/root checks, apt deps, TUN checks, gost/tun2socks downloads.
+- `08_helpers.sh`: quoting, escaping, IP/address helpers, SSH detection, and main IP detection.
+- `09_runtime_safety.sh`: fallback cleanup, tun preflight, and restart-with-rollback wrappers.
+- `10_route_scripts.sh`: generation of `routes-up.sh` and `routes-down.sh`.
+- `11_server.sh`: entry/server mode service/config flows.
+- `12_client.sh`: outlet/client mode config, tun config/service, priority switching.
+- `13_lifecycle_status_doctor.sh`: cleanup, restart, uninstall, status, and doctor/check.
+- `14_cli.sh`: menu, usage, command dispatch, and `main "$@"`.
 
 ## Rules for future changes
 
-- Keep release output as a single `getout.sh` unless the install/update flow is redesigned.
+- Edit `src/*.sh`, not `getout.sh`, unless you are intentionally debugging generated output.
+- Run `./build.sh` after changing `src/*.sh`.
+- Keep committing generated `getout.sh` and `getout.sh.sha256`; they are part of the release surface.
 - Do not change `status` plaintext password output unless the project owner explicitly changes that design decision.
 - Prefer adding tests in `tests/run.sh` before or with behavior changes.
-- Regenerate `getout.sh.sha256` whenever `getout.sh` changes.
-- Run this gate before committing:
+- Keep `getout.sh` single-file install/update behavior intact unless the install/update flow is explicitly redesigned.
+
+## Validation gate
+
+Run before committing:
 
 ```bash
+./build.sh
 bash -n getout.sh
 bash -n tests/run.sh
 tests/run.sh
 git diff --check
 ```
 
-## When to split files
-
-If a section keeps growing, split in development only:
-
-```text
-src/
-  00_constants.sh
-  01_logging.sh
-  02_update.sh
-  03_config.sh
-  04_rollback.sh
-  05_deps_downloads.sh
-  06_helpers.sh
-  07_runtime_wrappers.sh
-  08_routes_template.sh
-  09_server.sh
-  10_client.sh
-  11_cli.sh
-build.sh
-getout.sh
-```
-
-`build.sh` should concatenate `src/*.sh` into the release `getout.sh`, then regenerate `getout.sh.sha256`. Tests should continue to validate the generated release file.
+`tests/run.sh` also checks that `build.sh` output is current, so forgetting to regenerate `getout.sh` or `getout.sh.sha256` should fail the test gate.

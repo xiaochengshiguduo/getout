@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.2.2"
+SCRIPT_VERSION="0.3.0"
 INSTALL_PATH="/usr/local/bin/getout"
 UPDATE_URL="https://raw.githubusercontent.com/xiaochengshiguduo/getout/main/getout.sh"
 UPDATE_SHA256_URL="https://raw.githubusercontent.com/xiaochengshiguduo/getout/main/getout.sh.sha256"
@@ -52,25 +52,27 @@ DNS64_SERVERS=(
 # Maintainer map
 # -----------------------------------------------------------------------------
 # getout is intentionally published as one self-contained script so raw GitHub
-# install/update and a single checksum artifact stay simple. Keep future changes
-# inside these sections; if a section grows large enough, split it in src/ during
-# development and generate this single-file release artifact from a build step.
+# install/update and a single checksum artifact stay simple. Development sources
+# live in src/*.sh; build.sh concatenates them into this release artifact.
 #
-# 00 constants / globals                 (above)
-# 01 logging helpers
-# 02 self install / update / checksum
-# 03 config permissions and file metadata
-# 04 runtime/server rollback snapshots
-# 05 host prerequisites and binary downloads
-# 06 encoding, address, and SSH helpers
-# 07 cleanup, preflight, and restart wrappers
-# 08 generated route scripts
-# 09 service state and entry/server mode
-# 10 outlet/client mode
-# 11 lifecycle, status, diagnostics, and CLI
+# 00 prelude / shell options
+# 01 constants / globals
+# 02 logging helpers
+# 03 self install / update / checksum
+# 04 config permissions and file metadata
+# 05 resolver and managed file restore
+# 06 runtime/server rollback snapshots
+# 07 host prerequisites and binary downloads
+# 08 encoding, address, and SSH helpers
+# 09 cleanup, preflight, and restart wrappers
+# 10 generated route scripts
+# 11 service state and entry/server mode
+# 12 outlet/client mode
+# 13 lifecycle, status, and diagnostics
+# 14 CLI dispatch
 # =============================================================================
 
-# --- 01 logging helpers -------------------------------------------------------
+# --- 02 logging helpers -------------------------------------------------------
 
 info() { echo -e "${BLUE}[信息]${NC} $*"; }
 success() { echo -e "${GREEN}[成功]${NC} $*"; }
@@ -78,7 +80,7 @@ warn() { echo -e "${YELLOW}[警告]${NC} $*"; }
 err() { echo -e "${RED}[错误]${NC} $*" >&2; }
 fatal() { err "$*"; exit 1; }
 
-# --- 02 self install / update / checksum -------------------------------------
+# --- 03 self install / update / checksum -------------------------------------
 
 running_from_install_path() {
   local src="${BASH_SOURCE[0]:-$0}" real_src real_install
@@ -182,7 +184,7 @@ update_getout() {
   fi
 }
 
-# --- 03 config permissions and file metadata ---------------------------------
+# --- 04 config permissions and file metadata ---------------------------------
 
 ensure_conf_dir() {
   mkdir -p "$CONF_DIR"
@@ -246,7 +248,7 @@ backup_path_preserve_symlink() {
   write_file_meta "$path" "$meta" "$backup"
 }
 
-# --- 04 runtime/server rollback snapshots ------------------------------------
+# --- 05 resolver and managed file restore ------------------------------------
 
 restore_path_from_backup() {
   local path="$1" backup="$2" meta="$3" marker="$4" label="$5" target_backup="${6:-}"
@@ -281,6 +283,8 @@ restore_path_from_backup() {
   fi
   rm -f "$backup" "$meta" "$marker" "$target_backup" 2>/dev/null || true
 }
+
+# --- 06 runtime/server rollback snapshots ------------------------------------
 
 snapshot_runtime_files() {
   local dir
@@ -381,7 +385,7 @@ secure_existing_files() {
   [ -f "$ROUTES_DOWN" ] && chmod 700 "$ROUTES_DOWN" 2>/dev/null || true
 }
 
-# --- 05 host prerequisites and binary downloads ------------------------------
+# --- 07 host prerequisites and binary downloads ------------------------------
 
 require_root() {
   [ "${EUID:-$(id -u)}" -eq 0 ] || fatal "请使用 root 权限运行：sudo bash $0"
@@ -502,7 +506,7 @@ download_hev() {
   trap - RETURN
 }
 
-# --- 06 encoding, address, and SSH helpers -----------------------------------
+# --- 08 encoding, address, and SSH helpers -----------------------------------
 
 is_ipv6() { [[ "$1" == *:* ]]; }
 is_ipv4() { [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; }
@@ -577,7 +581,7 @@ main_ipv6() {
   ip -6 route get 2606:4700:4700::1111 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}' || true
 }
 
-# --- 07 cleanup, preflight, and restart wrappers -----------------------------
+# --- 09 cleanup, preflight, and restart wrappers -----------------------------
 
 run_quiet() { "$@" 2>/dev/null || true; }
 run_all_quiet() { while "$@" 2>/dev/null; do :; done; }
@@ -714,7 +718,7 @@ restart_gost_with_rollback() {
   clear_runtime_rollback "$snapshot"
 }
 
-# --- 08 generated route scripts ----------------------------------------------
+# --- 10 generated route scripts ----------------------------------------------
 
 write_routes_scripts() {
   ensure_conf_dir
@@ -1050,7 +1054,7 @@ EOF
   chmod 700 "$ROUTES_UP" "$ROUTES_DOWN" 2>/dev/null || true
 }
 
-# --- 09 service state and entry/server mode ----------------------------------
+# --- 11 service state and entry/server mode ----------------------------------
 
 service_active() {
   systemctl is-active --quiet "$1" 2>/dev/null
@@ -1199,7 +1203,7 @@ install_server() {
   start_server
 }
 
-# --- 10 outlet/client mode ----------------------------------------------------
+# --- 12 outlet/client mode ----------------------------------------------------
 
 current_priority_mode() {
   if [ -f "$CLIENT_CONF" ]; then
@@ -1490,7 +1494,7 @@ install_tun() {
   start_client "$1"
 }
 
-# --- 11 lifecycle, status, diagnostics, and CLI ------------------------------
+# --- 13 lifecycle, status, and diagnostics -----------------------------------
 
 cleanup_rules() {
   [ -x "$ROUTES_DOWN" ] && "$ROUTES_DOWN" >/dev/null 2>&1 || true
@@ -1707,6 +1711,8 @@ doctor_check() {
     fatal "doctor 检查发现阻塞问题，请按上方错误处理。"
   fi
 }
+
+# --- 14 CLI dispatch ---------------------------------------------------------
 
 menu_action_label() {
   local type="$1" mode="$(current_mode)"

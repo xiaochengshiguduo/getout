@@ -13,6 +13,16 @@ make_lib() {
   awk '/^main "\$@"/ {exit} {print}' "$SCRIPT" > "$lib"
 }
 
+run_build_output_is_current() {
+  local before_script="$TMP_ROOT/getout.before" before_hash="$TMP_ROOT/getout.sha256.before"
+  cp "$ROOT_DIR/getout.sh" "$before_script"
+  cp "$ROOT_DIR/getout.sh.sha256" "$before_hash"
+  "$ROOT_DIR/build.sh" >/dev/null
+  cmp -s "$before_script" "$ROOT_DIR/getout.sh"
+  cmp -s "$before_hash" "$ROOT_DIR/getout.sh.sha256"
+  pass 'build.sh output is current'
+}
+
 run_bash_syntax() {
   bash -n "$SCRIPT"
   pass 'getout.sh syntax'
@@ -249,6 +259,7 @@ run_checksum_verification() {
   pass 'update checksum verification accepts match and rejects mismatch'
 }
 
+run_build_output_is_current
 run_bash_syntax
 run_route_script_syntax
 run_runtime_restore_deletes_new_files
