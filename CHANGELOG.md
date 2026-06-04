@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.3
+
+- 第三方二进制下载增加固定 SHA256 完整性校验，覆盖 `gost v2.11.5` 和 `hev-socks5-tunnel 2.15.0` 当前支持的 Linux 架构。
+- 支持通过 `GETOUT_GOST_SHA256` / `GETOUT_HEV_SHA256` 覆盖期望校验值，方便自行固定替换资产。
+- README/SECURITY 补充第三方二进制校验说明，并将系统要求同步为 Debian 11/12/13。
+- 测试增加第三方二进制 SHA256 校验成功/失败路径。
+
 ## 0.3.2
 
 - 修复出口模式 stop/restart 可能导致当前 SSH/控制面连接失联的问题。

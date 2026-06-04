@@ -92,14 +92,24 @@ download_file() {
   download_dns64_only "$url" "$output"
 }
 
+verify_download_sha256() {
+  local file="$1" expected="$2" label="$3" checksum
+  [ -n "$expected" ] || fatal "$label 缺少 SHA256 校验值，已取消安装。"
+  command -v sha256sum >/dev/null 2>&1 || fatal "缺少 sha256sum，无法校验 $label。"
+  checksum="$(sha256sum "$file" | awk '{print $1}')"
+  [ "$checksum" = "$expected" ] || fatal "$label SHA256 校验失败，已取消安装。"
+}
+
 download_gost() {
-  local arch url tmp
+  local arch url tmp expected
   arch="$(arch_gost)"
   url="https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost-linux-${arch}-${GOST_VERSION}.gz"
+  expected="${GETOUT_GOST_SHA256:-${GOST_SHA256[$arch]:-}}"
   tmp="$(mktemp)"
   trap 'rm -f "$tmp"' RETURN
   info "下载 gost：$url"
   download_file "$url" "$tmp" || fatal "gost 下载失败：常规下载和 DNS64 均不可用。"
+  verify_download_sha256 "$tmp" "$expected" "gost ${GOST_VERSION} linux-${arch}"
   gunzip -c "$tmp" > "$GOST_BIN"
   chmod +x "$GOST_BIN"
   rm -f "$tmp"
@@ -107,15 +117,16 @@ download_gost() {
 }
 
 download_hev() {
-  local arch url tmp
+  local arch url tmp expected
   arch="$(arch_hev)"
   url="https://github.com/heiher/hev-socks5-tunnel/releases/download/${HEV_VERSION}/hev-socks5-tunnel-linux-${arch}"
+  expected="${GETOUT_HEV_SHA256:-${HEV_SHA256[$arch]:-}}"
   tmp="$(mktemp)"
   trap 'rm -f "$tmp"' RETURN
   info "下载 hev-socks5-tunnel：$url"
   download_file "$url" "$tmp" || fatal "hev-socks5-tunnel 下载失败：常规下载和 DNS64 均不可用。"
+  verify_download_sha256 "$tmp" "$expected" "hev-socks5-tunnel ${HEV_VERSION} linux-${arch}"
   install -m 0755 "$tmp" "$TUN_BIN"
   rm -f "$tmp"
   trap - RETURN
 }
-

@@ -289,6 +289,31 @@ run_checksum_verification() {
   pass 'update checksum verification accepts match and rejects mismatch'
 }
 
+run_binary_checksum_verification() {
+  local t="$TMP_ROOT/binary-checksum"
+  local lib="$t/lib.sh" sample="$t/sample.bin"
+  mkdir -p "$t"
+  make_lib "$lib"
+  printf 'binary\n' > "$sample"
+  (
+    set -euo pipefail
+    # shellcheck disable=SC1090
+    . "$lib"
+    verify_download_sha256 "$sample" "$(sha256sum "$sample" | awk '{print $1}')" "sample binary"
+    [ -n "${GOST_SHA256[amd64]:-}" ]
+    [ -n "${GOST_SHA256[armv8]:-}" ]
+    [ -n "${HEV_SHA256[x86_64]:-}" ]
+    [ -n "${HEV_SHA256[arm64]:-}" ]
+  )
+  set +e
+  out="$(bash -c '. "$1"; verify_download_sha256 "$2" bad "sample binary"' _ "$lib" "$sample" 2>&1)"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ]
+  grep -q 'sample binary SHA256 校验失败' <<<"$out"
+  pass 'third-party binary checksum verification accepts match and rejects mismatch'
+}
+
 run_build_output_is_current
 run_bash_syntax
 run_route_script_syntax
@@ -300,3 +325,4 @@ run_stop_cleanup_order_protects_control_plane
 run_password_prompts_are_plaintext
 run_checksum_file_matches_script
 run_checksum_verification
+run_binary_checksum_verification

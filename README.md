@@ -21,7 +21,7 @@
 
 ## 系统要求
 
-- Debian 11/12
+- Debian 11/12/13
 - root 权限
 - `/dev/net/tun` 可用
 - systemd
@@ -220,6 +220,20 @@ GETOUT_UPDATE_SHA256_URL=https://example.com/getout.sh.sha256 getout update
 
 注意：当前实现是 SHA256 完整性校验，不是 GPG/minisign 强签名校验。强签名需要额外发布公钥和签名文件。
 
+### 第三方二进制完整性校验
+
+`gost` 和 `hev-socks5-tunnel` 下载完成后会进行 SHA256 校验。脚本内置当前支持架构的固定校验值：
+
+- `gost v2.11.5`: `linux-amd64`、`linux-armv8`
+- `hev-socks5-tunnel 2.15.0`: `linux-x86_64`、`linux-arm64`
+
+如果你自行替换上游版本或下载资产，可以用环境变量覆盖期望值：
+
+```bash
+GETOUT_GOST_SHA256=<sha256> getout server
+GETOUT_HEV_SHA256=<sha256> getout dual
+```
+
 ## 环境诊断
 
 ```bash
@@ -273,6 +287,7 @@ tests/run.sh
 - `systemctl daemon-reload` 在出口/入口模式写 service 后失败时的回滚；
 - `build.sh` 生成的 `getout.sh` / `getout.sh.sha256` 没有漂移；
 - 更新 SHA256 校验成功/失败路径。
+- 第三方二进制 SHA256 校验成功/失败路径。
 
 ## 维护结构
 
@@ -308,6 +323,7 @@ tests/run.sh
 - 出口模式依赖 TUN、nftables、conntrack/fib 规则能力；如果 `getout doctor` 或启动 preflight 失败，请先按错误提示处理内核/系统能力问题。
 - 更新后如果服务正在运行，建议执行 `getout restart`，让 systemd unit 和路由脚本刷新到最新版本。
 - 当前 SHA256 是完整性校验，不是强签名；如果需要更强供应链保护，请使用可信网络、固定 SHA256，或后续接入 GPG/minisign 签名发布。
+- `gost` 和 `hev-socks5-tunnel` 第三方二进制当前做固定 SHA256 完整性校验，但仍不是 GPG/minisign 强签名；高安全场景请自行固定可信来源或接入强签名验证。
 
 ## 已测试环境
 
