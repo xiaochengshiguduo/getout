@@ -308,6 +308,14 @@ restore_gai() {
   fi
 }
 
+# 先撤销全局 tun 接管，再移除 SSH/入站保护规则。
+# stop/restart 时 tun2socks 可能已在退出过程中；如果先删保护规则，
+# 当前 SSH/控制面连接回包会短暂落入仍存在的 lookup TABLE_ID -> tun0，导致失联。
+run_all ip rule del lookup "$TABLE_ID" pref 20
+run_all ip -6 rule del lookup "$TABLE_ID" pref 20
+run_all ip route del default dev "$TUN_NAME" table "$TABLE_ID"
+run_all ip -6 route del default dev "$TUN_NAME" table "$TABLE_ID"
+
 run nft delete table inet "$NFT_TABLE"
 run_all ip rule del fwmark "$BYPASS_MARK_ID" lookup main pref 9
 run_all ip -6 rule del fwmark "$BYPASS_MARK_ID" lookup main pref 9
@@ -323,10 +331,6 @@ for dns in $RUNTIME_DNS_SERVERS; do if is_ipv6 "$dns"; then del6_to_main "$dns/1
 for cidr in 127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 224.0.0.0/4; do del4_to_main "$cidr" 16; done
 for cidr in ::1/128 fe80::/10 fc00::/7 ff00::/8; do del6_to_main "$cidr" 16; done
 
-run_all ip rule del lookup "$TABLE_ID" pref 20
-run_all ip -6 rule del lookup "$TABLE_ID" pref 20
-run_all ip route del default dev "$TUN_NAME" table "$TABLE_ID"
-run_all ip -6 route del default dev "$TUN_NAME" table "$TABLE_ID"
 restore_dns
 restore_gai
 EOF

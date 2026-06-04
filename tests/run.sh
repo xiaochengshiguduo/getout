@@ -225,6 +225,35 @@ CASE
   pass 'entry daemon-reload failure rolls back server snapshot'
 }
 
+run_stop_cleanup_order_protects_control_plane() {
+  local t="$TMP_ROOT/stop-order"
+  local lib="$t/lib.sh"
+  mkdir -p "$t"
+  make_lib "$lib"
+  (
+    set -euo pipefail
+    # shellcheck disable=SC1090
+    . "$lib"
+    CONF_DIR="$t/conf"
+    CLIENT_CONF="$CONF_DIR/client.conf"
+    TUN_CONF="$CONF_DIR/tun2socks.yaml"
+    ROUTES_UP="$CONF_DIR/routes-up.sh"
+    ROUTES_DOWN="$CONF_DIR/routes-down.sh"
+    TUN_SERVICE="$t/getout-tun.service"
+    TUN_BIN="$t/getout-tun2socks"
+    systemctl() { :; }
+    mkdir -p "$CONF_DIR"
+    write_routes_scripts
+    write_tun_service dual
+    lookup_line="$(grep -n 'ip rule del lookup "\$TABLE_ID" pref 20' "$ROUTES_DOWN" | head -n1 | cut -d: -f1)"
+    nft_line="$(grep -n 'nft delete table inet "\$NFT_TABLE"' "$ROUTES_DOWN" | head -n1 | cut -d: -f1)"
+    [ -n "$lookup_line" ] && [ -n "$nft_line" ] && [ "$lookup_line" -lt "$nft_line" ]
+    grep -q "^ExecStop=$ROUTES_DOWN$" "$TUN_SERVICE"
+    grep -q "^ExecStopPost=$ROUTES_DOWN$" "$TUN_SERVICE"
+  )
+  pass 'stop cleanup removes global tun route before protection rules'
+}
+
 run_password_prompts_are_plaintext() {
   ! grep -Eq 'read[[:space:]][^\n]*-[^\n]*s' "$SCRIPT"
   grep -q '上游 SOCKS5 用户名 \[无认证可留空\]' "$SCRIPT"
@@ -267,6 +296,7 @@ run_runtime_restore_deletes_new_files
 run_preflight_failure_rolls_back
 run_daemon_reload_failure_rolls_back_runtime
 run_server_daemon_reload_failure_rolls_back
+run_stop_cleanup_order_protects_control_plane
 run_password_prompts_are_plaintext
 run_checksum_file_matches_script
 run_checksum_verification

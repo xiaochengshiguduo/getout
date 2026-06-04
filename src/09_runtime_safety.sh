@@ -5,15 +5,18 @@ run_all_quiet() { while "$@" 2>/dev/null; do :; done; }
 
 fallback_cleanup_rules() {
   local port cidr dns
+  # Remove global policy routing first so live SSH/control-plane replies return
+  # to the main table before we remove the explicit protection rules.
+  run_all_quiet ip rule del lookup "$TABLE_ID" pref 20
+  run_all_quiet ip -6 rule del lookup "$TABLE_ID" pref 20
+  run_all_quiet ip route del default dev "$TUN_NAME" table "$TABLE_ID"
+  run_all_quiet ip -6 route del default dev "$TUN_NAME" table "$TABLE_ID"
+
   run_quiet nft delete table inet "$NFT_TABLE"
   run_all_quiet ip rule del fwmark "$BYPASS_MARK_ID" lookup main pref 9
   run_all_quiet ip -6 rule del fwmark "$BYPASS_MARK_ID" lookup main pref 9
   run_all_quiet ip rule del fwmark "$MARK_ID" lookup main pref 10
   run_all_quiet ip -6 rule del fwmark "$MARK_ID" lookup main pref 10
-  run_all_quiet ip rule del lookup "$TABLE_ID" pref 20
-  run_all_quiet ip -6 rule del lookup "$TABLE_ID" pref 20
-  run_all_quiet ip route del default dev "$TUN_NAME" table "$TABLE_ID"
-  run_all_quiet ip -6 route del default dev "$TUN_NAME" table "$TABLE_ID"
   for port in $(ssh_listen_ports | tr '\n' ' ') 22; do
     [[ "$port" =~ ^[0-9]+$ ]] || continue
     run_all_quiet ip rule del ipproto tcp sport "$port" lookup main pref 6

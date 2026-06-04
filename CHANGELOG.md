@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.2
+
+- 修复出口模式 stop/restart 可能导致当前 SSH/控制面连接失联的问题。
+- `routes-down.sh` 和 fallback 清理现在先撤销全局 `lookup TABLE_ID -> tun0` 接管，再删除 SSH/入站回包保护规则。
+- `getout-tun.service` 增加 `ExecStop=$ROUTES_DOWN`，正常停止时先清理路由再停止 tun2socks，同时保留 `ExecStopPost=$ROUTES_DOWN` 兜底异常退出。
+- 测试增加 stop cleanup 顺序和 systemd stop 钩子校验。
+
 ## 0.3.1
 
 - 加固 `build.sh`：校验模块清单中模块存在、没有重复项、没有遗漏未列入构建顺序的 `src/*.sh`。

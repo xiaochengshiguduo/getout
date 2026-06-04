@@ -145,6 +145,7 @@ ExecStartPre=/sbin/sysctl -w net.ipv4.conf.all.rp_filter=0
 ExecStart=$TUN_BIN $TUN_CONF
 ExecStartPost=/bin/sleep 1
 ExecStartPost=$ROUTES_UP
+ExecStop=$ROUTES_DOWN
 ExecStopPost=$ROUTES_DOWN
 Restart=on-failure
 RestartSec=5
