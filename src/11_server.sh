@@ -214,12 +214,12 @@ prompt_wg_server_info() {
 
   echo ""
   echo -e "${GREEN}========================================${NC}"
-  echo -e "${GREEN} 出口模式需要填写以下信息:${NC}"
+  echo -e "${GREEN} 入口信息:${NC}"
   echo -e "${GREEN}========================================${NC}"
-  echo -e "  服务端公钥: ${BLUE}${server_pub}${NC}"
-  echo -e "  客户端私钥: ${BLUE}${peer_private}${NC}"
-  echo -e "  服务器地址: ${BLUE}$(main_ipv6 || main_ipv4 || echo '<本机IP>')${NC}"
-  echo -e "  服务器端口: ${BLUE}${listen_port}${NC}"
+  echo -e "  公钥: ${BLUE}${server_pub}${NC}"
+  echo -e "  私钥: ${BLUE}${peer_private}${NC}"
+  echo -e "  地址: ${BLUE}$(main_ipv6 || main_ipv4 || echo '<本机IP>')${NC}"
+  echo -e "  端口: ${BLUE}${listen_port}${NC}"
   echo -e "${GREEN}========================================${NC}"
 }
 
