@@ -185,29 +185,18 @@ prompt_wg_server_info() {
   listen_port="${listen_port:-$DEFAULT_WG_PORT}"
   [[ "$listen_port" =~ ^[0-9]+$ ]] && [ "$listen_port" -ge 1 ] && [ "$listen_port" -le 65535 ] || fatal "端口无效：$listen_port"
 
-  read -rp "请输入服务端私钥 (PrivateKey) [留空自动生成]: " private_key
-  if [ -z "$private_key" ]; then
-    private_key="$(wg genkey)" || fatal "生成私钥失败，请确认 wireguard-tools 已安装。"
-    local derived_pub
-    derived_pub="$(printf '%s' "$private_key" | wg pubkey)" || fatal "派生公钥失败。"
-    echo "  已自动生成私钥: $private_key"
-    echo "  对应公钥 (客户端需填入): $derived_pub"
-    echo ""
-  fi
+  # 自动生成服务端密钥对
+  private_key="$(wg genkey)" || fatal "生成私钥失败，请确认 wireguard-tools 已安装。"
+  local server_pub
+  server_pub="$(printf '%s' "$private_key" | wg pubkey)" || fatal "派生公钥失败。"
+
+  # 自动生成客户端密钥对
+  local peer_private
+  peer_private="$(wg genkey)" || fatal "生成客户端私钥失败。"
+  peer_public_key="$(printf '%s' "$peer_private" | wg pubkey)" || fatal "派生客户端公钥失败。"
 
   read -rp "请输入服务端隧道地址/掩码 [默认: ${DEFAULT_WG_ADDRESS}]: " address
   address="${address:-$DEFAULT_WG_ADDRESS}"
-
-  read -rp "请输入对端公钥 (Peer PublicKey) [留空自动生成客户端密钥对]: " peer_public_key
-  if [ -z "$peer_public_key" ]; then
-    local peer_private
-    peer_private="$(wg genkey)" || fatal "生成对端私钥失败。"
-    peer_public_key="$(printf '%s' "$peer_private" | wg pubkey)" || fatal "派生对端公钥失败。"
-    echo "  已自动生成客户端密钥对:"
-    echo "    客户端私钥 (请复制到客户端配置): $peer_private"
-    echo "    客户端公钥: $peer_public_key"
-    echo ""
-  fi
 
   read -rp "请输入对端允许的 IP (AllowedIPs) [默认: 0.0.0.0/0,::/0]: " allowed_ips
   allowed_ips="${allowed_ips:-0.0.0.0/0,::/0}"
@@ -222,6 +211,16 @@ prompt_wg_server_info() {
     printf 'ALLOWED_IPS=%s\n' "$(shell_quote "$allowed_ips")"
   } > "$SERVER_CONF"
   chmod_private_file "$SERVER_CONF"
+
+  echo ""
+  echo -e "${GREEN}========================================${NC}"
+  echo -e "${GREEN} 出口模式需要填写以下信息:${NC}"
+  echo -e "${GREEN}========================================${NC}"
+  echo -e "  服务端公钥: ${BLUE}${server_pub}${NC}"
+  echo -e "  客户端私钥: ${BLUE}${peer_private}${NC}"
+  echo -e "  服务器地址: ${BLUE}$(main_ipv6 || main_ipv4 || echo '<本机IP>')${NC}"
+  echo -e "  服务器端口: ${BLUE}${listen_port}${NC}"
+  echo -e "${GREEN}========================================${NC}"
 }
 
 write_wg_server_service() {
