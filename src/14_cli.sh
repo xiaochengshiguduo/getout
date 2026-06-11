@@ -4,11 +4,17 @@ menu_action_label() {
   local type="$1" mode="$(current_mode)"
   case "$type" in
     server)
-      if server_active; then echo "关闭入口模式"; else echo "启动入口模式"; fi ;;
+      if server_active; then echo "关闭 SOCKS5 入口"; else echo "启动 SOCKS5 入口"; fi ;;
+    wg-server)
+      if wg_server_active; then echo "关闭 WireGuard 入口"; else echo "启动 WireGuard 入口"; fi ;;
     v4)
       if tun_active && [ "$mode" = "v4" ]; then echo "关闭 V4 单栈模式"; else echo "启动 V4 单栈模式"; fi ;;
     dual)
       if tun_active && [ "$mode" = "dual" ]; then echo "关闭 V4+V6 双栈模式"; else echo "启动 V4+V6 双栈模式"; fi ;;
+    wg-v4)
+      if wg_client_active && [ "$mode" = "wg-v4" ]; then echo "关闭 WG-V4 单栈"; else echo "启动 WG-V4 单栈"; fi ;;
+    wg-dual)
+      if wg_client_active && [ "$mode" = "wg-dual" ]; then echo "关闭 WG-V4+V6 双栈"; else echo "启动 WG-V4+V6 双栈"; fi ;;
   esac
 }
 
@@ -17,43 +23,65 @@ menu() {
   echo -e "${BLUE}====================================================${NC}"
   echo -e "${BLUE}                 getout 管理面板${NC}"
   echo -e "${BLUE}====================================================${NC}"
-  echo "1.$(menu_action_label server)"
-  echo "2.修改入口信息"
-  echo "3.$(menu_action_label v4)"
-  echo "4.$(menu_action_label dual)"
-  echo "5.修改出口信息"
-  echo "6.$(priority_action_label)"
-  echo "7.查看状态"
-  echo "8.重启 getout"
-  echo "9.更新 getout"
-  echo "10.卸载 getout"
-  echo "11.退出"
+  echo "--- 入口模式 ---"
+  echo "  1.$(menu_action_label server)"
+  echo "  2.$(menu_action_label wg-server)"
+  echo "  3.修改入口信息"
+  echo "--- 出口模式 ---"
+  echo "  4.$(menu_action_label v4)"
+  echo "  5.$(menu_action_label dual)"
+  echo "  6.$(menu_action_label wg-v4)"
+  echo "  7.$(menu_action_label wg-dual)"
+  echo "  8.修改出口信息"
+  echo "  9.$(priority_action_label)"
+  echo "--- 管理 ---"
+  echo "  10.查看状态"
+  echo "  11.重启 getout"
+  echo "  12.更新 getout"
+  echo "  13.卸载 getout"
+  echo "  14.退出"
   echo
-  read -rp "请选择 [1-11]: " choice
+  read -rp "请选择 [1-14]: " choice
   case "$choice" in
     1) if server_active; then stop_server; else start_server; fi ;;
-    2) configure_server ;;
-    3) if client_mode_active v4; then stop_client; else start_client v4; fi ;;
-    4) if client_mode_active dual; then stop_client; else start_client dual; fi ;;
-    5) configure_client ;;
-    6) switch_priority_mode ;;
-    7) status ;;
-    8) restart_getout ;;
-    9) update_getout ;;
-    10) read -rp "确认卸载 getout? [y/N]: " yn; [[ "$yn" =~ ^[Yy]$ ]] && uninstall_all || echo "已取消" ;;
-    11) exit 0 ;;
+    2) if wg_server_active; then stop_wg_server; else start_wg_server; fi ;;
+    3)
+      echo -e "${BLUE}修改入口模式:${NC}"
+      echo "  a. SOCKS5 入口"
+      echo "  b. WireGuard 入口"
+      read -rp "请选择 [a/b]: " entry_choice
+      case "$entry_choice" in
+        a) configure_server ;;
+        b) configure_wg_server ;;
+        *) fatal "无效选项。" ;;
+      esac
+      ;;
+    4) if client_mode_active v4; then stop_client; else start_client v4; fi ;;
+    5) if client_mode_active dual; then stop_client; else start_client dual; fi ;;
+    6) if client_mode_active wg-v4; then stop_client; else start_wg_client wg-v4; fi ;;
+    7) if client_mode_active wg-dual; then stop_client; else start_wg_client wg-dual; fi ;;
+    8) configure_client ;;
+    9) switch_priority_mode ;;
+    10) status ;;
+    11) restart_getout ;;
+    12) update_getout ;;
+    13) read -rp "确认卸载 getout? [y/N]: " yn; [[ "$yn" =~ ^[Yy]$ ]] && uninstall_all || echo "已取消" ;;
+    14) exit 0 ;;
     *) fatal "无效选项。" ;;
   esac
 }
 
 usage() {
   cat <<EOF
-用法：getout [server|v4|dual|stop|restart|status|doctor|check|update|uninstall]
+用法：getout [server|wg-server|v4|dual|wg-v4|wg-dual|stop|restart|status|doctor|check|update|uninstall]
 
-server     启动入口模式，复用已有入口配置；没有配置时询问
-v4         启动 V4 单栈出口模式，复用已有出口配置；没有配置时询问
-dual       启动 V4+V6 双栈出口模式，复用已有出口配置；没有配置时询问
-stop       关闭当前运行中的 getout 模式，并关闭对应自启动
+server     启动 SOCKS5 入口模式
+wg-server  启动 WireGuard 入口模式
+v4         启动 V4 单栈出口模式 (tun2socks)
+dual       启动 V4+V6 双栈出口模式 (tun2socks)
+wg-v4      启动 WireGuard V4 单栈出口模式
+wg-dual    启动 WireGuard V4+V6 双栈出口模式
+stop       关闭当前运行中的 getout 模式
 restart    重启当前运行中的 getout 模式
 status     查看状态
 doctor     检查系统环境、配置权限、服务文件和出口预检
@@ -66,7 +94,11 @@ EOF
 stop_current() {
   if server_active; then
     stop_server
+  elif wg_server_active; then
+    stop_wg_server
   elif tun_active; then
+    stop_client
+  elif wg_client_active; then
     stop_client
   else
     warn "当前 getout 未运行。"
@@ -89,8 +121,11 @@ main() {
 
   case "${1:-}" in
     server) start_server ;;
+    wg-server) start_wg_server ;;
     v4) start_client v4 ;;
     dual) start_client dual ;;
+    wg-v4) start_wg_client wg-v4 ;;
+    wg-dual) start_wg_client wg-dual ;;
     stop) stop_current ;;
     restart) restart_getout ;;
     status) status ;;

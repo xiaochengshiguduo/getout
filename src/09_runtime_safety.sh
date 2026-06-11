@@ -138,3 +138,45 @@ restart_gost_with_rollback() {
   clear_runtime_rollback "$snapshot"
 }
 
+
+preflight_wg_runtime() {
+  command -v wg >/dev/null 2>&1 || { err "未找到 wg 命令，请安装 wireguard-tools"; return 1; }
+  command -v wg-quick >/dev/null 2>&1 || { err "未找到 wg-quick 命令，请安装 wireguard-tools"; return 1; }
+  [ -s "$WG_CONF" ] || { err "WireGuard 配置为空或不存在：$WG_CONF"; return 1; }
+  [ -x "$ROUTES_UP" ] || { err "routes-up.sh 不可执行：$ROUTES_UP"; return 1; }
+  [ -x "$ROUTES_DOWN" ] || { err "routes-down.sh 不可执行：$ROUTES_DOWN"; return 1; }
+  bash -n "$ROUTES_UP" || { err "routes-up.sh 语法校验失败。"; return 1; }
+  bash -n "$ROUTES_DOWN" || { err "routes-down.sh 语法校验失败。"; return 1; }
+  command -v nft >/dev/null 2>&1 || { err "未找到 nft，无法启用外部入站连接回包保护。"; return 1; }
+  nft delete table inet getout_preflight 2>/dev/null || true
+  nft add table inet getout_preflight >/dev/null 2>&1 || { err "nftables 预检失败：无法创建 inet table。"; return 1; }
+  nft add chain inet getout_preflight prerouting '{ type filter hook prerouting priority -150; policy accept; }' >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败。"; return 1; }
+  nft add chain inet getout_preflight output '{ type route hook output priority -150; policy accept; }' >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败。"; return 1; }
+  nft add rule inet getout_preflight prerouting iifname != "$TUN_NAME" ct state new fib daddr type local ct mark set "$BYPASS_MARK_ID" >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败。"; return 1; }
+  nft add rule inet getout_preflight output ct mark "$BYPASS_MARK_ID" meta mark set "$BYPASS_MARK_ID" >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败。"; return 1; }
+  nft delete table inet getout_preflight 2>/dev/null || true
+}
+
+preflight_wg_runtime_with_rollback() {
+  local snapshot="$1"
+  preflight_wg_runtime || {
+    restore_runtime_or_warn "$snapshot"
+    exit 1
+  }
+}
+
+restart_wg_with_rollback() {
+  local snapshot="$1" action="${2:-restart}"
+  if [ "$action" = "enable" ]; then
+    systemctl enable --now getout-wg.service
+  else
+    systemctl restart getout-wg.service
+  fi
+  sleep 2
+  if ! systemctl is-active --quiet getout-wg.service; then
+    restore_runtime_or_warn "$snapshot"
+    systemctl restart getout-wg.service 2>/dev/null || true
+    fatal "getout-wg.service 启动失败，请查看：journalctl -u getout-wg.service -e"
+  fi
+  clear_runtime_rollback "$snapshot"
+}

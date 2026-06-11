@@ -12,6 +12,7 @@ MODE_FILE="$CONF_DIR/mode"
 SERVER_CONF="$CONF_DIR/server.conf"
 CLIENT_CONF="$CONF_DIR/client.conf"
 TUN_CONF="$CONF_DIR/tun2socks.yaml"
+WG_CONF="$CONF_DIR/wireguard.conf"
 ROUTES_UP="$CONF_DIR/routes-up.sh"
 ROUTES_DOWN="$CONF_DIR/routes-down.sh"
 RUNTIME_DNS_V4_SERVERS=("8.8.8.8" "1.1.1.1")
@@ -29,6 +30,7 @@ GOST_BIN="/usr/local/bin/getout-gost"
 TUN_BIN="/usr/local/bin/getout-tun2socks"
 GOST_SERVICE="/etc/systemd/system/getout-gost.service"
 TUN_SERVICE="/etc/systemd/system/getout-tun.service"
+WG_SERVICE="/etc/systemd/system/getout-wg.service"
 
 GOST_VERSION="2.11.5"
 HEV_VERSION="2.15.0"
@@ -52,6 +54,9 @@ DNS64_SERVERS=(
   "2a01:4f8:c2c:123f::1"
   "2001:67c:2960::6464"
 )
+DEFAULT_WG_PORT="51820"
+DEFAULT_WG_ADDRESS="10.66.66.1/24"
+DEFAULT_WG_DNS="10.66.66.1"
 
 # =============================================================================
 # Maintainer map

@@ -18,6 +18,7 @@ MODE_FILE="$CONF_DIR/mode"
 SERVER_CONF="$CONF_DIR/server.conf"
 CLIENT_CONF="$CONF_DIR/client.conf"
 TUN_CONF="$CONF_DIR/tun2socks.yaml"
+WG_CONF="$CONF_DIR/wireguard.conf"
 ROUTES_UP="$CONF_DIR/routes-up.sh"
 ROUTES_DOWN="$CONF_DIR/routes-down.sh"
 RUNTIME_DNS_V4_SERVERS=("8.8.8.8" "1.1.1.1")
@@ -35,6 +36,7 @@ GOST_BIN="/usr/local/bin/getout-gost"
 TUN_BIN="/usr/local/bin/getout-tun2socks"
 GOST_SERVICE="/etc/systemd/system/getout-gost.service"
 TUN_SERVICE="/etc/systemd/system/getout-tun.service"
+WG_SERVICE="/etc/systemd/system/getout-wg.service"
 
 GOST_VERSION="2.11.5"
 HEV_VERSION="2.15.0"
@@ -58,6 +60,9 @@ DNS64_SERVERS=(
   "2a01:4f8:c2c:123f::1"
   "2001:67c:2960::6464"
 )
+DEFAULT_WG_PORT="51820"
+DEFAULT_WG_ADDRESS="10.66.66.1/24"
+DEFAULT_WG_DNS="10.66.66.1"
 
 # =============================================================================
 # Maintainer map
@@ -412,7 +417,7 @@ install_deps() {
   local missing=() cmd pkg
   declare -A map=(
     [curl]=curl [gzip]=gzip [gunzip]=gzip [ip]=iproute2 [ss]=iproute2 [nft]=nftables
-    [systemctl]=systemd [sysctl]=procps [awk]=mawk [grep]=grep [sed]=sed
+    [systemctl]=systemd [sysctl]=procps [awk]=mawk [grep]=grep [sed]=sed [wg]=wireguard-tools [modprobe]=kmod
   )
   for cmd in "${!map[@]}"; do
     command -v "$cmd" >/dev/null 2>&1 || missing+=("${map[$cmd]}")
@@ -426,6 +431,17 @@ install_deps() {
 
 ensure_tun() {
   [ -c /dev/net/tun ] || fatal "未检测到 /dev/net/tun，请先在 VPS 控制面板开启 TUN。"
+}
+
+ensure_wgmod() {
+  if ! lsmod 2>/dev/null | grep -q '^wireguard\b'; then
+    modprobe wireguard 2>/dev/null || fatal "无法加载 WireGuard 内核模块 (wireguard.ko)，请确认内核版本 >= 5.6 或已安装 wireguard-dkms。"
+  fi
+}
+
+ensure_wg() {
+  command -v wg >/dev/null 2>&1 || fatal "未找到 wg 命令，请先安装 wireguard-tools：apt install wireguard-tools"
+  ensure_wgmod
 }
 
 arch_gost() {
@@ -526,6 +542,12 @@ download_hev() {
   install -m 0755 "$tmp" "$TUN_BIN"
   rm -f "$tmp"
   trap - RETURN
+}
+
+download_wg_service() {
+  # WireGuard 使用系统自带的 wg-quick@.service，无需下载额外二进制。
+  # 此函数仅用于确认 wg-quick 命令可用。
+  command -v wg-quick >/dev/null 2>&1 || fatal "未找到 wg-quick 命令，请先安装 wireguard-tools：apt install wireguard-tools"
 }
 # --- 08 encoding, address, and SSH helpers -----------------------------------
 
@@ -742,6 +764,48 @@ restart_gost_with_rollback() {
   clear_runtime_rollback "$snapshot"
 }
 
+
+preflight_wg_runtime() {
+  command -v wg >/dev/null 2>&1 || { err "未找到 wg 命令，请安装 wireguard-tools"; return 1; }
+  command -v wg-quick >/dev/null 2>&1 || { err "未找到 wg-quick 命令，请安装 wireguard-tools"; return 1; }
+  [ -s "$WG_CONF" ] || { err "WireGuard 配置为空或不存在：$WG_CONF"; return 1; }
+  [ -x "$ROUTES_UP" ] || { err "routes-up.sh 不可执行：$ROUTES_UP"; return 1; }
+  [ -x "$ROUTES_DOWN" ] || { err "routes-down.sh 不可执行：$ROUTES_DOWN"; return 1; }
+  bash -n "$ROUTES_UP" || { err "routes-up.sh 语法校验失败。"; return 1; }
+  bash -n "$ROUTES_DOWN" || { err "routes-down.sh 语法校验失败。"; return 1; }
+  command -v nft >/dev/null 2>&1 || { err "未找到 nft，无法启用外部入站连接回包保护。"; return 1; }
+  nft delete table inet getout_preflight 2>/dev/null || true
+  nft add table inet getout_preflight >/dev/null 2>&1 || { err "nftables 预检失败：无法创建 inet table。"; return 1; }
+  nft add chain inet getout_preflight prerouting '{ type filter hook prerouting priority -150; policy accept; }' >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败。"; return 1; }
+  nft add chain inet getout_preflight output '{ type route hook output priority -150; policy accept; }' >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败。"; return 1; }
+  nft add rule inet getout_preflight prerouting iifname != "$TUN_NAME" ct state new fib daddr type local ct mark set "$BYPASS_MARK_ID" >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败。"; return 1; }
+  nft add rule inet getout_preflight output ct mark "$BYPASS_MARK_ID" meta mark set "$BYPASS_MARK_ID" >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败。"; return 1; }
+  nft delete table inet getout_preflight 2>/dev/null || true
+}
+
+preflight_wg_runtime_with_rollback() {
+  local snapshot="$1"
+  preflight_wg_runtime || {
+    restore_runtime_or_warn "$snapshot"
+    exit 1
+  }
+}
+
+restart_wg_with_rollback() {
+  local snapshot="$1" action="${2:-restart}"
+  if [ "$action" = "enable" ]; then
+    systemctl enable --now getout-wg.service
+  else
+    systemctl restart getout-wg.service
+  fi
+  sleep 2
+  if ! systemctl is-active --quiet getout-wg.service; then
+    restore_runtime_or_warn "$snapshot"
+    systemctl restart getout-wg.service 2>/dev/null || true
+    fatal "getout-wg.service 启动失败，请查看：journalctl -u getout-wg.service -e"
+  fi
+  clear_runtime_rollback "$snapshot"
+}
 # --- 10 generated route scripts ----------------------------------------------
 
 write_routes_scripts() {
@@ -1100,9 +1164,19 @@ current_mode() {
 
 server_active() { service_active getout-gost.service; }
 tun_active() { service_active getout-tun.service; }
+wg_server_active() { service_active getout-wg.service; }
+wg_client_active() {
+  local mode="$(current_mode)"
+  service_active getout-wg.service && [[ "$mode" =~ ^wg- ]]
+}
+any_client_active() { tun_active || wg_client_active; }
 client_mode_active() {
   local mode="$(current_mode)"
-  tun_active && [ "$mode" = "$1" ]
+  if [[ "$mode" =~ ^wg- ]]; then
+    wg_client_active && [ "$mode" = "$1" ]
+  else
+    tun_active && [ "$mode" = "$1" ]
+  fi
 }
 
 stop_server_keep_config() {
@@ -1111,9 +1185,22 @@ stop_server_keep_config() {
 }
 
 stop_client_keep_config() {
-  systemctl stop getout-tun.service 2>/dev/null || true
-  cleanup_rules
-  systemctl disable getout-tun.service 2>/dev/null || true
+  local mode
+  mode="$(current_mode)"
+  if [[ "$mode" =~ ^wg- ]]; then
+    systemctl stop getout-wg.service 2>/dev/null || true
+    cleanup_rules
+    systemctl disable getout-wg.service 2>/dev/null || true
+  else
+    systemctl stop getout-tun.service 2>/dev/null || true
+    cleanup_rules
+    systemctl disable getout-tun.service 2>/dev/null || true
+  fi
+}
+
+stop_wg_server_keep_config() {
+  systemctl stop getout-wg.service 2>/dev/null || true
+  systemctl disable getout-wg.service 2>/dev/null || true
 }
 
 prompt_server_info() {
@@ -1231,6 +1318,167 @@ install_server() {
   start_server
 }
 
+# --- WireGuard 入口模式 ---
+
+prompt_wg_server_info() {
+  require_root; require_debian; install_deps
+  ensure_conf_dir
+  local listen_addr listen_port private_key address peer_public_key allowed_ips
+
+  read -rp "请输入 WireGuard 监听地址 [默认: 0.0.0.0]: " listen_addr
+  listen_addr="${listen_addr:-0.0.0.0}"
+  [[ "$listen_addr" =~ ^[0-9a-fA-F.:]+$ ]] || fatal "地址无效：$listen_addr"
+
+  read -rp "请输入 WireGuard 监听端口 [默认: ${DEFAULT_WG_PORT}]: " listen_port
+  listen_port="${listen_port:-$DEFAULT_WG_PORT}"
+  [[ "$listen_port" =~ ^[0-9]+$ ]] && [ "$listen_port" -ge 1 ] && [ "$listen_port" -le 65535 ] || fatal "端口无效：$listen_port"
+
+  read -rp "请输入服务端私钥 (PrivateKey): " private_key
+  [ -n "$private_key" ] || fatal "私钥不能为空。"
+
+  read -rp "请输入服务端隧道地址/掩码 [默认: ${DEFAULT_WG_ADDRESS}]: " address
+  address="${address:-$DEFAULT_WG_ADDRESS}"
+
+  read -rp "请输入对端公钥 (Peer PublicKey): " peer_public_key
+  [ -n "$peer_public_key" ] || fatal "对端公钥不能为空。"
+
+  read -rp "请输入对端允许的 IP (AllowedIPs) [默认: 0.0.0.0/0,::/0]: " allowed_ips
+  allowed_ips="${allowed_ips:-0.0.0.0/0,::/0}"
+
+  {
+    printf 'SERVER_MODE=wireguard\n'
+    printf 'LISTEN_ADDRESS=%s\n' "$(shell_quote "$listen_addr")"
+    printf 'LISTEN_PORT=%s\n' "$(shell_quote "$listen_port")"
+    printf 'PRIVATE_KEY=%s\n' "$(shell_quote "$private_key")"
+    printf 'ADDRESS=%s\n' "$(shell_quote "$address")"
+    printf 'PEER_PUBLIC_KEY=%s\n' "$(shell_quote "$peer_public_key")"
+    printf 'ALLOWED_IPS=%s\n' "$(shell_quote "$allowed_ips")"
+  } > "$SERVER_CONF"
+  chmod_private_file "$SERVER_CONF"
+}
+
+write_wg_server_service() {
+  [ -f "$SERVER_CONF" ] || fatal "未找到入口配置，请先修改入口信息。"
+  assert_private_config "$SERVER_CONF"
+  # shellcheck disable=SC1090
+  . "$SERVER_CONF"
+  [ -n "${LISTEN_PORT:-}" ] || fatal "入口配置缺少 LISTEN_PORT。"
+  [ -n "${ADDRESS:-}" ] || fatal "入口配置缺少 ADDRESS。"
+  [ -n "${PRIVATE_KEY:-}" ] || fatal "入口配置缺少 PRIVATE_KEY。"
+  [ -n "${PEER_PUBLIC_KEY:-}" ] || fatal "入口配置缺少 PEER_PUBLIC_KEY。"
+
+  local listen_addr="${LISTEN_ADDRESS:-0.0.0.0}"
+  local peer_allowed="${ALLOWED_IPS:-0.0.0.0/0,::/0}"
+
+  # 写入 WireGuard 配置文件
+  cat > "$WG_CONF" <<EOF
+[Interface]
+Address = ${ADDRESS}
+ListenPort = ${LISTEN_PORT}
+PrivateKey = ${PRIVATE_KEY}
+
+[Peer]
+PublicKey = ${PEER_PUBLIC_KEY}
+AllowedIPs = ${peer_allowed}
+EOF
+  chmod_private_file "$WG_CONF"
+
+  # 写入 systemd service
+  cat > "$WG_SERVICE" <<EOF
+[Unit]
+Description=Getout WireGuard Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/wg-quick up $WG_CONF
+ExecStop=/usr/bin/wg-quick down $WG_CONF
+ExecStopPost=/usr/bin/wg-quick down $WG_CONF 2>/dev/null || true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  chmod_private_file "$WG_SERVICE"
+  systemctl daemon-reload
+}
+
+start_wg_server() {
+  local snapshot
+  require_root; require_debian; install_deps
+  ensure_conf_dir; ensure_wg
+  snapshot="$(snapshot_server_files)"
+  begin_server_rollback "$snapshot"
+  stop_client_keep_config
+  stop_server_keep_config
+  if [ -f "$SERVER_CONF" ] && grep -q '^SERVER_MODE=wireguard' "$SERVER_CONF"; then
+    assert_private_config "$SERVER_CONF"
+    # shellcheck disable=SC1090
+    . "$SERVER_CONF"
+  else
+    if [ ! -t 0 ]; then
+      restore_server_or_warn "$snapshot"
+      fatal "未找到 WireGuard 入口配置，请先交互运行 getout wg-server 或在菜单中选择 2 配置。"
+    fi
+    prompt_wg_server_info
+  fi
+  write_wg_server_service
+  echo "wg-server" > "$MODE_FILE"
+  chmod_private_file "$MODE_FILE"
+  systemctl enable --now getout-wg.service
+  sleep 2
+  if ! systemctl is-active --quiet getout-wg.service; then
+    restore_server_or_warn "$snapshot"
+    systemctl restart getout-wg.service 2>/dev/null || true
+    fatal "getout-wg.service 启动失败，请查看：journalctl -u getout-wg.service -e"
+  fi
+  clear_runtime_rollback "$snapshot"
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+    assert_private_config "$SERVER_CONF"
+    # shellcheck disable=SC1090
+    . "$SERVER_CONF"
+    ufw allow "${LISTEN_PORT}/udp" >/dev/null || true
+  fi
+  success "入口 WireGuard 模式已启动。"
+  status
+}
+
+stop_wg_server() {
+  require_root
+  stop_wg_server_keep_config
+  success "入口 WireGuard 模式已关闭。"
+}
+
+configure_wg_server() {
+  local snapshot was_active
+  was_active=0; wg_server_active && was_active=1
+  ensure_conf_dir
+  snapshot="$(snapshot_server_files)"
+  begin_server_rollback "$snapshot"
+  prompt_wg_server_info
+  write_wg_server_service
+  if [ "$was_active" = "1" ]; then
+    systemctl restart getout-wg.service
+    sleep 2
+    if ! systemctl is-active --quiet getout-wg.service; then
+      restore_server_or_warn "$snapshot"
+      systemctl restart getout-wg.service 2>/dev/null || true
+      fatal "getout-wg.service 启动失败，请查看：journalctl -u getout-wg.service -e"
+    fi
+    clear_runtime_rollback "$snapshot"
+    systemctl enable getout-wg.service >/dev/null 2>&1 || true
+    success "入口 WireGuard 信息已更新并立即应用。"
+    status
+  else
+    clear_runtime_rollback "$snapshot"
+    success "入口 WireGuard 信息已保存，启动入口模式后生效。"
+    if any_client_active; then
+      warn "当前出口模式正在运行，入口信息不会影响当前出口模式。"
+    fi
+  fi
+}
+
 # --- 12 outlet/client mode ----------------------------------------------------
 
 current_priority_mode() {
@@ -1331,6 +1579,137 @@ reuse_client_config_for_mode() {
   return 0
 }
 
+ask_wg_config() {
+  local mode="$1" server_addr server_port client_private_key client_address server_public_key psk dns
+
+  read -rp "请输入 WireGuard 服务器地址 IPv4/IPv6: " server_addr
+  server_addr="$(strip_brackets "$server_addr")"
+  [ -n "$server_addr" ] || fatal "服务器地址不能为空。"
+
+  read -rp "请输入 WireGuard 服务器端口 [默认: ${DEFAULT_WG_PORT}]: " server_port
+  server_port="${server_port:-$DEFAULT_WG_PORT}"
+  [[ "$server_port" =~ ^[0-9]+$ ]] && [ "$server_port" -ge 1 ] && [ "$server_port" -le 65535 ] || fatal "端口无效：$server_port"
+
+  read -rp "请输入客户端私钥 (PrivateKey): " client_private_key
+  [ -n "$client_private_key" ] || fatal "客户端私钥不能为空。"
+
+  read -rp "请输入客户端隧道地址/掩码 [默认: 10.66.66.2/24]: " client_address
+  client_address="${client_address:-10.66.66.2/24}"
+
+  read -rp "请输入服务端公钥 (PublicKey): " server_public_key
+  [ -n "$server_public_key" ] || fatal "服务端公钥不能为空。"
+
+  read -rp "预共享密钥 (PresharedKey) [可留空]: " psk
+
+  read -rp "DNS 服务器 [默认: ${DEFAULT_WG_DNS}]: " dns
+  dns="${dns:-$DEFAULT_WG_DNS}"
+
+  write_wg_client_conf "$mode" "$server_addr" "$server_port" "$client_private_key" "$client_address" "$server_public_key" "$psk" "$dns"
+}
+
+write_wg_client_conf() {
+  local mode="$1" server_addr="$2" server_port="$3" client_private_key="$4" client_address="$5" server_public_key="$6" psk="$7" dns="$8"
+  local ssh_ip ssh_ports v4 v6 runtime_dns priority_mode
+  priority_mode="$(current_priority_mode)"
+  ssh_ip="$(ssh_remote_ip || true)"
+  ssh_ports="$(ssh_listen_ports | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+  v4="$(main_ipv4 || true)"
+  v6="$(main_ipv6 || true)"
+  runtime_dns="$(runtime_dns_servers_text "$priority_mode")"
+  ensure_conf_dir
+  {
+    printf 'MODE=%s\n' "$(shell_quote "$mode")"
+    printf 'TRANSPORT=wireguard\n'
+    printf 'WG_SERVER_ADDRESS=%s\n' "$(shell_quote "$server_addr")"
+    printf 'WG_SERVER_PORT=%s\n' "$(shell_quote "$server_port")"
+    printf 'WG_CLIENT_PRIVATE_KEY=%s\n' "$(shell_quote "$client_private_key")"
+    printf 'WG_CLIENT_ADDRESS=%s\n' "$(shell_quote "$client_address")"
+    printf 'WG_SERVER_PUBLIC_KEY=%s\n' "$(shell_quote "$server_public_key")"
+    printf 'WG_PRESHARED_KEY=%s\n' "$(shell_quote "$psk")"
+    printf 'WG_DNS=%s\n' "$(shell_quote "$dns")"
+    printf 'SOCKS_ADDRESS=%s\n' "$(shell_quote "$server_addr")"
+    printf 'SSH_REMOTE_IP=%s\n' "$(shell_quote "$ssh_ip")"
+    printf 'SSH_PORTS=%s\n' "$(shell_quote "$ssh_ports")"
+    printf 'MAIN_IPV4=%s\n' "$(shell_quote "$v4")"
+    printf 'MAIN_IPV6=%s\n' "$(shell_quote "$v6")"
+    printf 'TABLE_ID=%s\n' "$(shell_quote "$TABLE_ID")"
+    printf 'MARK_ID=%s\n' "$(shell_quote "$MARK_ID")"
+    printf 'BYPASS_MARK_ID=%s\n' "$(shell_quote "$BYPASS_MARK_ID")"
+    printf 'NFT_TABLE=%s\n' "$(shell_quote "$NFT_TABLE")"
+    printf 'IFACE=%s\n' "$(shell_quote "getout-${WG_IFACE}")"
+    printf 'TUN_NAME=%s\n' "$(shell_quote "getout-${WG_IFACE}")"
+    printf 'PRIORITY_MODE=%s\n' "$(shell_quote "$priority_mode")"
+    printf 'RUNTIME_DNS_SERVERS=%s\n' "$(shell_quote "$runtime_dns")"
+    printf 'RUNTIME_DNS_ENABLE=1\n'
+  } > "$CLIENT_CONF"
+  chmod_private_file "$CLIENT_CONF"
+}
+
+reuse_wg_client_config() {
+  local mode="$1"
+  [ -f "$CLIENT_CONF" ] || return 1
+  assert_private_config "$CLIENT_CONF"
+  # shellcheck disable=SC1090
+  . "$CLIENT_CONF"
+  [ "${TRANSPORT:-}" = "wireguard" ] || return 1
+  [ -n "${WG_SERVER_ADDRESS:-}" ] && [ -n "${WG_SERVER_PORT:-}" ] || return 1
+  [ -n "${WG_CLIENT_PRIVATE_KEY:-}" ] && [ -n "${WG_SERVER_PUBLIC_KEY:-}" ] || return 1
+  # Rewrite with the new mode to update MODE field
+  write_wg_client_conf "$mode" "$WG_SERVER_ADDRESS" "$WG_SERVER_PORT" "$WG_CLIENT_PRIVATE_KEY" "${WG_CLIENT_ADDRESS:-10.66.66.2/24}" "$WG_SERVER_PUBLIC_KEY" "${WG_PRESHARED_KEY:-}" "${WG_DNS:-$DEFAULT_WG_DNS}"
+  return 0
+}
+
+write_wg_config() {
+  assert_private_config "$CLIENT_CONF"
+  # shellcheck disable=SC1090
+  . "$CLIENT_CONF"
+  [ "${TRANSPORT:-}" = "wireguard" ] || return 1
+
+  local iface="${TUN_NAME:-getout-${WG_IFACE}}"
+  cat > "$WG_CONF" <<EOF
+[Interface]
+PrivateKey = ${WG_CLIENT_PRIVATE_KEY}
+Address = ${WG_CLIENT_ADDRESS:-10.66.66.2/24}
+DNS = ${WG_DNS:-$DEFAULT_WG_DNS}
+Table = off
+
+[Peer]
+PublicKey = ${WG_SERVER_PUBLIC_KEY}
+$(if [ -n "${WG_PRESHARED_KEY:-}" ]; then echo "PresharedKey = ${WG_PRESHARED_KEY}"; fi)
+Endpoint = ${WG_SERVER_ADDRESS}:${WG_SERVER_PORT}
+AllowedIPs = 0.0.0.0/0, ::/0
+PersistentKeepalive = 25
+EOF
+  chmod_private_file "$WG_CONF"
+}
+
+write_wg_service() {
+  local mode="$1"
+  local iface="${TUN_NAME:-getout-${WG_IFACE}}"
+  cat > "$WG_SERVICE" <<EOF
+[Unit]
+Description=Getout WireGuard Client ($mode)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/sbin/sysctl -w net.ipv4.conf.all.rp_filter=0
+ExecStart=/usr/bin/wg-quick up $WG_CONF
+ExecStartPost=/bin/sleep 1
+ExecStartPost=$ROUTES_UP
+ExecStop=$ROUTES_DOWN
+ExecStopPost=/usr/bin/wg-quick down $WG_CONF 2>/dev/null || true
+ExecStopPost=$ROUTES_DOWN
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  chmod_private_file "$WG_SERVICE"
+  systemctl daemon-reload
+}
+
 write_tun_config() {
   assert_private_config "$CLIENT_CONF"
   # shellcheck disable=SC1090
@@ -1419,6 +1798,36 @@ start_client() {
   status
 }
 
+start_wg_client() {
+  local mode="$1"
+  local snapshot
+  require_root; require_debian; install_deps; ensure_wg
+  ensure_conf_dir
+  snapshot="$(snapshot_runtime_files)"
+  begin_runtime_rollback "$snapshot"
+  stop_server_keep_config
+  if any_client_active; then
+    stop_client_keep_config
+  fi
+  if ! reuse_wg_client_config "$mode"; then
+    if [ ! -t 0 ]; then
+      restore_runtime_or_warn "$snapshot"
+      fatal "未找到 WireGuard 出口配置，请先交互运行 getout $mode 或在菜单中选择 6/7 配置。"
+    fi
+    ask_wg_config "$mode"
+  fi
+  write_wg_config
+  write_routes_scripts
+  preflight_wg_runtime_with_rollback "$snapshot"
+  echo "$mode" > "$MODE_FILE"
+  chmod_private_file "$MODE_FILE"
+  write_wg_service "$mode"
+  warn_ssh_protection_status
+  restart_wg_with_rollback "$snapshot" enable
+  success "${mode} WireGuard 模式已启动。"
+  status
+}
+
 stop_client() {
   local mode="$(current_mode)"
   require_root
@@ -1426,14 +1835,28 @@ stop_client() {
   case "$mode" in
     v4) success "V4 单栈模式已关闭。" ;;
     dual) success "V4+V6 双栈模式已关闭。" ;;
+    wg-v4) success "WireGuard V4 单栈模式已关闭。" ;;
+    wg-dual) success "WireGuard V4+V6 双栈模式已关闭。" ;;
     *) success "出口模式已关闭。" ;;
   esac
 }
 
 configure_client() {
-  require_root; require_debian; install_deps; ensure_tun
+  require_root; require_debian; install_deps
   ensure_conf_dir
-  local mode snapshot was_active
+  local mode snapshot was_active transport
+  transport="socks5"
+  if [ -f "$CLIENT_CONF" ]; then
+    assert_private_config "$CLIENT_CONF"
+    # shellcheck disable=SC1090
+    . "$CLIENT_CONF"
+    transport="${TRANSPORT:-socks5}"
+  fi
+  if [ "$transport" = "wireguard" ]; then
+    configure_wg_client "$@"
+    return
+  fi
+  ensure_tun
   was_active=0; tun_active && was_active=1
   snapshot="$(snapshot_runtime_files)"
   begin_runtime_rollback "$snapshot"
@@ -1472,6 +1895,47 @@ configure_client() {
   fi
 }
 
+configure_wg_client() {
+  require_root; require_debian; install_deps; ensure_wg
+  ensure_conf_dir
+  local mode snapshot was_active
+  was_active=0; any_client_active && was_active=1
+  snapshot="$(snapshot_runtime_files)"
+  begin_runtime_rollback "$snapshot"
+  if wg_client_active; then
+    mode="$(current_mode)"
+    [ "$mode" = "wg-v4" ] || [ "$mode" = "wg-dual" ] || mode="wg-v4"
+  elif [ -f "$CLIENT_CONF" ]; then
+    assert_private_config "$CLIENT_CONF"
+    # shellcheck disable=SC1090
+    . "$CLIENT_CONF"
+    mode="${MODE:-wg-v4}"
+  else
+    mode="wg-v4"
+  fi
+  ask_wg_config "$mode"
+  write_wg_config
+  write_routes_scripts
+  write_wg_service "$mode"
+  preflight_wg_runtime_with_rollback "$snapshot"
+  echo "$mode" > "$MODE_FILE"
+  chmod_private_file "$MODE_FILE"
+  if [ "$was_active" = "1" ]; then
+    systemctl stop getout-wg.service 2>/dev/null || true
+    cleanup_rules
+    warn_ssh_protection_status
+    restart_wg_with_rollback "$snapshot" enable
+    success "WireGuard 出口信息已更新并立即应用。"
+    status
+  else
+    clear_runtime_rollback "$snapshot"
+    success "WireGuard 出口信息已保存，启动 WireGuard 模式后生效。"
+    if server_active; then
+      warn "当前入口模式正在运行，出口信息不会影响当前入口模式。"
+    fi
+  fi
+}
+
 priority_action_label() {
   case "$(current_priority_mode)" in
     v4) echo "切换至 V6 优先模式" ;;
@@ -1482,35 +1946,62 @@ priority_action_label() {
 switch_priority_mode() {
   require_root; require_debian; install_deps
   [ -f "$CLIENT_CONF" ] || fatal "未找到出口配置，请先修改出口信息。"
-  local mode address port username password priority_mode snapshot was_active
-  was_active=0; tun_active && was_active=1
-  snapshot="$(snapshot_runtime_files)"
-  begin_runtime_rollback "$snapshot"
+  local mode transport snapshot was_active priority_mode
   assert_private_config "$CLIENT_CONF"
   # shellcheck disable=SC1090
   . "$CLIENT_CONF"
-  mode="${MODE:-v4}"
-  address="${SOCKS_ADDRESS:-}"
-  port="${SOCKS_PORT:-}"
-  username="${SOCKS_USERNAME:-}"
-  password="${SOCKS_PASSWORD:-}"
-  [ -n "$address" ] && [ -n "$port" ] || fatal "出口配置不完整，请先修改出口信息。"
-  case "$(current_priority_mode)" in
-    v4) priority_mode="v6" ;;
-    *) priority_mode="v4" ;;
-  esac
-  write_client_conf "$mode" "$address" "$port" "$username" "$password" "$priority_mode"
-  write_tun_config
-  write_routes_scripts
-  write_tun_service "$mode"
-  preflight_tun_runtime_with_rollback "$snapshot"
-  if [ "$was_active" = "1" ]; then
-    systemctl stop getout-tun.service 2>/dev/null || true
-    cleanup_rules
-    warn_ssh_protection_status
-    restart_tun_with_rollback "$snapshot" enable
+  transport="${TRANSPORT:-socks5}"
+  snapshot="$(snapshot_runtime_files)"
+  begin_runtime_rollback "$snapshot"
+  if [ "$transport" = "wireguard" ]; then
+    was_active=0; wg_client_active && was_active=1
+    mode="${MODE:-wg-v4}"
+    case "$(current_priority_mode)" in
+      v4) priority_mode="v6" ;;
+      *) priority_mode="v4" ;;
+    esac
+    write_wg_client_conf "$mode" "$WG_SERVER_ADDRESS" "$WG_SERVER_PORT" "$WG_CLIENT_PRIVATE_KEY" "${WG_CLIENT_ADDRESS:-10.66.66.2/24}" "$WG_SERVER_PUBLIC_KEY" "${WG_PRESHARED_KEY:-}" "${WG_DNS:-$DEFAULT_WG_DNS}"
+    # Override priority mode
+    {
+      cat "$CLIENT_CONF"
+      printf 'PRIORITY_MODE=%s\n' "$(shell_quote "$priority_mode")"
+    } > "${CLIENT_CONF}.tmp"
+    mv "${CLIENT_CONF}.tmp" "$CLIENT_CONF"
+    chmod_private_file "$CLIENT_CONF"
+    write_wg_config
+    write_routes_scripts
+    write_wg_service "$mode"
+    preflight_wg_runtime_with_rollback "$snapshot"
+    if [ "$was_active" = "1" ]; then
+      systemctl stop getout-wg.service 2>/dev/null || true
+      cleanup_rules
+      warn_ssh_protection_status
+      restart_wg_with_rollback "$snapshot" enable
+    else
+      clear_runtime_rollback "$snapshot"
+    fi
   else
-    clear_runtime_rollback "$snapshot"
+    was_active=0; tun_active && was_active=1
+    mode="${MODE:-v4}"
+    local address="${SOCKS_ADDRESS:-}" port="${SOCKS_PORT:-}" username="${SOCKS_USERNAME:-}" password="${SOCKS_PASSWORD:-}"
+    [ -n "$address" ] && [ -n "$port" ] || fatal "出口配置不完整，请先修改出口信息。"
+    case "$(current_priority_mode)" in
+      v4) priority_mode="v6" ;;
+      *) priority_mode="v4" ;;
+    esac
+    write_client_conf "$mode" "$address" "$port" "$username" "$password" "$priority_mode"
+    write_tun_config
+    write_routes_scripts
+    write_tun_service "$mode"
+    preflight_tun_runtime_with_rollback "$snapshot"
+    if [ "$was_active" = "1" ]; then
+      systemctl stop getout-tun.service 2>/dev/null || true
+      cleanup_rules
+      warn_ssh_protection_status
+      restart_tun_with_rollback "$snapshot" enable
+    else
+      clear_runtime_rollback "$snapshot"
+    fi
   fi
   case "$priority_mode" in
     v4) success "已切换至 V4 优先模式。" ;;
@@ -1520,7 +2011,12 @@ switch_priority_mode() {
 }
 
 install_tun() {
-  start_client "$1"
+  local transport="${2:-socks5}"
+  if [ "$transport" = "wireguard" ]; then
+    start_wg_client "$1"
+  else
+    start_client "$1"
+  fi
 }
 
 # --- 13 lifecycle, status, and diagnostics -----------------------------------
@@ -1533,7 +2029,10 @@ cleanup_rules() {
 
 restart_getout() {
   require_root
-  if server_active; then
+  local mode_file_content
+  mode_file_content="$(current_mode)"
+
+  if server_active && [ "$mode_file_content" = "server" ]; then
     local snapshot
     ensure_conf_dir
     snapshot="$(snapshot_server_files)"
@@ -1545,15 +2044,36 @@ restart_getout() {
     chmod_private_file "$MODE_FILE"
     restart_gost_with_rollback "$snapshot" restart
     systemctl enable getout-gost.service >/dev/null 2>&1 || true
-    systemctl disable getout-tun.service >/dev/null 2>&1 || true
+    systemctl disable getout-tun.service getout-wg.service >/dev/null 2>&1 || true
     success "入口模式已重启。"
     status
-  elif tun_active; then
+  elif wg_server_active && [ "$mode_file_content" = "wg-server" ]; then
+    local snapshot
+    ensure_conf_dir
+    snapshot="$(snapshot_server_files)"
+    begin_server_rollback "$snapshot"
+    [ -f "$SERVER_CONF" ] || fatal "未找到入口配置，请先修改入口信息。"
+    assert_private_config "$SERVER_CONF"
+    # shellcheck disable=SC1090
+    . "$SERVER_CONF"
+    [ "${SERVER_MODE:-}" = "wireguard" ] || fatal "入口配置不是 WireGuard 模式。"
+    write_wg_server_service
+    systemctl restart getout-wg.service
+    sleep 2
+    if ! systemctl is-active --quiet getout-wg.service; then
+      restore_server_or_warn "$snapshot"
+      fatal "getout-wg.service 启动失败，请查看：journalctl -u getout-wg.service -e"
+    fi
+    clear_runtime_rollback "$snapshot"
+    systemctl enable getout-wg.service >/dev/null 2>&1 || true
+    systemctl disable getout-gost.service getout-tun.service >/dev/null 2>&1 || true
+    success "入口 WireGuard 模式已重启。"
+    status
+  elif tun_active && [[ "$mode_file_content" =~ ^(v4|dual)$ ]]; then
     local mode address port username password priority_mode snapshot
     snapshot="$(snapshot_runtime_files)"
     begin_runtime_rollback "$snapshot"
-    mode="$(current_mode)"
-    [ "$mode" = "v4" ] || [ "$mode" = "dual" ] || mode="v4"
+    mode="$mode_file_content"
     if [ -f "$CLIENT_CONF" ]; then
       assert_private_config "$CLIENT_CONF"
       # shellcheck disable=SC1090
@@ -1574,63 +2094,111 @@ restart_getout() {
     warn_ssh_protection_status
     restart_tun_with_rollback "$snapshot" restart
     systemctl enable getout-tun.service >/dev/null 2>&1 || true
-    systemctl disable getout-gost.service >/dev/null 2>&1 || true
+    systemctl disable getout-gost.service getout-wg.service >/dev/null 2>&1 || true
     success "出口模式已重启。"
     status
+  elif wg_client_active && [[ "$mode_file_content" =~ ^wg- ]]; then
+    local mode snapshot
+    snapshot="$(snapshot_runtime_files)"
+    begin_runtime_rollback "$snapshot"
+    mode="$mode_file_content"
+    if [ -f "$CLIENT_CONF" ]; then
+      assert_private_config "$CLIENT_CONF"
+      # shellcheck disable=SC1090
+      . "$CLIENT_CONF"
+      [ "${TRANSPORT:-}" = "wireguard" ] || fatal "出口配置不是 WireGuard 模式。"
+      write_wg_config
+      write_routes_scripts
+      write_wg_service "$mode"
+      preflight_wg_runtime_with_rollback "$snapshot"
+    fi
+    cleanup_rules
+    warn_ssh_protection_status
+    restart_wg_with_rollback "$snapshot" restart
+    systemctl enable getout-wg.service >/dev/null 2>&1 || true
+    systemctl disable getout-gost.service getout-tun.service >/dev/null 2>&1 || true
+    success "WireGuard 出口模式已重启。"
+    status
   else
-    warn "当前 getout 未运行，请选择 1/3/4 启动。"
+    warn "当前 getout 未运行，请选择 1/3/4/5/6 启动。"
   fi
 }
 
 uninstall_all() {
   require_root
   cleanup_rules
-  systemctl stop getout-tun.service getout-gost.service 2>/dev/null || true
-  systemctl disable getout-tun.service getout-gost.service 2>/dev/null || true
-  rm -f "$TUN_SERVICE" "$GOST_SERVICE"
+  systemctl stop getout-tun.service getout-gost.service getout-wg.service 2>/dev/null || true
+  systemctl disable getout-tun.service getout-gost.service getout-wg.service 2>/dev/null || true
+  # 清理 WireGuard 接口（如果是 getout 管理的）
+  if [ -f "$WG_CONF" ]; then
+    wg-quick down "$WG_CONF" 2>/dev/null || true
+  fi
+  rm -f "$TUN_SERVICE" "$GOST_SERVICE" "$WG_SERVICE"
   rm -f "$TUN_BIN" "$GOST_BIN"
   rm -f "$INSTALL_PATH"
   rm -rf "$CONF_DIR"
   systemctl daemon-reload 2>/dev/null || true
-  systemctl reset-failed getout-tun.service getout-gost.service 2>/dev/null || true
+  systemctl reset-failed getout-tun.service getout-gost.service getout-wg.service 2>/dev/null || true
   success "getout 已卸载并清理完成。"
 }
 
 status() {
-  local mode gost_state tun_state gost_enabled tun_enabled
+  local mode gost_state tun_state wg_state gost_enabled tun_enabled wg_enabled
   mode="$(current_mode)"
-  gost_state="已停止"; tun_state="已停止"
+  gost_state="已停止"; tun_state="已停止"; wg_state="已停止"
   server_active && gost_state="运行中"
   tun_active && tun_state="运行中"
+  (wg_server_active || wg_client_active) && wg_state="运行中"
   gost_enabled="$(service_enabled_text getout-gost.service)"
   tun_enabled="$(service_enabled_text getout-tun.service)"
+  wg_enabled="$(service_enabled_text getout-wg.service)"
 
   echo -e "${CYAN}========== getout 状态 ==========${NC}"
   echo "版本: $SCRIPT_VERSION"
   echo
   echo "当前运行:"
-  echo "入口模式: $gost_state"
-  if tun_active && [ "$mode" = "v4" ]; then
-    echo "V4 单栈模式: 运行中"
-  else
-    echo "V4 单栈模式: 已停止"
-  fi
-  if tun_active && [ "$mode" = "dual" ]; then
-    echo "V4+V6 双栈模式: 运行中"
-  else
-    echo "V4+V6 双栈模式: 已停止"
-  fi
-  if server_active; then
-    echo "当前模式: server"
-  elif tun_active; then
-    echo "当前模式: $mode"
-  else
-    echo "当前模式: none"
-  fi
+  case "$mode" in
+    server)
+      echo "入口 SOCKS5: $gost_state"
+      echo "出口: 已停止"
+      echo "当前模式: server"
+      ;;
+    wg-server)
+      echo "入口 WireGuard: $wg_state"
+      echo "出口: 已停止"
+      echo "当前模式: wg-server"
+      ;;
+    v4)
+      echo "入口: $gost_state"
+      echo "V4 单栈模式: $tun_state"
+      echo "当前模式: v4"
+      ;;
+    dual)
+      echo "入口: $gost_state"
+      echo "V4+V6 双栈模式: $tun_state"
+      echo "当前模式: dual"
+      ;;
+    wg-v4)
+      echo "入口: $gost_state"
+      echo "WireGuard V4 单栈模式: $wg_state"
+      echo "当前模式: wg-v4"
+      ;;
+    wg-dual)
+      echo "入口: $gost_state"
+      echo "WireGuard V4+V6 双栈模式: $wg_state"
+      echo "当前模式: wg-dual"
+      ;;
+    *)
+      echo "入口: $gost_state"
+      echo "当前模式: none"
+      ;;
+  esac
+
   echo
   echo "自启动:"
-  echo "入口模式: $gost_enabled"
-  echo "出口模式: $tun_enabled"
+  echo "入口 SOCKS5: $gost_enabled"
+  echo "出口 tun2socks: $tun_enabled"
+  echo "WireGuard: $wg_enabled"
 
   echo
   echo "入口信息:"
@@ -1638,13 +2206,21 @@ status() {
     assert_private_config "$SERVER_CONF"
     # shellcheck disable=SC1090
     . "$SERVER_CONF"
-    echo "监听端口: ${PORT:-}"
-    if [ -n "${USERNAME:-}" ]; then
-      echo "认证: 开启"
-      echo "用户名: ${USERNAME:-}"
-      echo "密码: ${PASSWORD:-}"
+    if [ "${SERVER_MODE:-}" = "wireguard" ]; then
+      echo "类型: WireGuard"
+      echo "监听地址: ${LISTEN_ADDRESS:-0.0.0.0}:${LISTEN_PORT:-}"
+      echo "隧道地址: ${ADDRESS:-}"
+      echo "对端公钥: ${PEER_PUBLIC_KEY:-}"
     else
-      echo "认证: 关闭"
+      echo "类型: SOCKS5 (gost)"
+      echo "监听端口: ${PORT:-}"
+      if [ -n "${USERNAME:-}" ]; then
+        echo "认证: 开启"
+        echo "用户名: ${USERNAME:-}"
+        echo "密码: ${PASSWORD:-}"
+      else
+        echo "认证: 关闭"
+      fi
     fi
   else
     echo "未配置"
@@ -1656,13 +2232,21 @@ status() {
     assert_private_config "$CLIENT_CONF"
     # shellcheck disable=SC1090
     . "$CLIENT_CONF"
-    echo "SOCKS5: [${SOCKS_ADDRESS:-}]:${SOCKS_PORT:-}"
+    if [ "${TRANSPORT:-}" = "wireguard" ]; then
+      echo "类型: WireGuard"
+      echo "服务器: ${WG_SERVER_ADDRESS:-}:${WG_SERVER_PORT:-}"
+      echo "客户端地址: ${WG_CLIENT_ADDRESS:-}"
+      echo "DNS: ${WG_DNS:-}"
+    else
+      echo "类型: SOCKS5"
+      echo "地址: [${SOCKS_ADDRESS:-}]:${SOCKS_PORT:-}"
+      echo "用户名: ${SOCKS_USERNAME:-}"
+      echo "密码: ${SOCKS_PASSWORD:-}"
+    fi
     case "${PRIORITY_MODE:-$DEFAULT_PRIORITY_MODE}" in
       v4) echo "优先模式: V4 优先" ;;
       *) echo "优先模式: V6 优先" ;;
     esac
-    echo "用户名: ${SOCKS_USERNAME:-}"
-    echo "密码: ${SOCKS_PASSWORD:-}"
   else
     echo "未配置"
   fi
@@ -1717,10 +2301,13 @@ doctor_check() {
     check_warn "出口配置不存在。"
   fi
 
-  [ -x "$GOST_BIN" ] && check_ok "入口二进制存在：$GOST_BIN" || check_warn "入口二进制不存在，启动入口模式时会下载。"
-  [ -x "$TUN_BIN" ] && check_ok "出口二进制存在：$TUN_BIN" || check_warn "出口二进制不存在，启动出口模式时会下载。"
-  [ -f "$GOST_SERVICE" ] && check_ok "入口 systemd unit 存在" || check_warn "入口 systemd unit 不存在。"
-  [ -f "$TUN_SERVICE" ] && check_ok "出口 systemd unit 存在" || check_warn "出口 systemd unit 不存在。"
+  [ -x "$GOST_BIN" ] && check_ok "入口二进制存在：$GOST_BIN" || check_warn "入口二进制不存在，启动 SOCKS5 入口模式时会下载。"
+  [ -x "$TUN_BIN" ] && check_ok "出口二进制存在：$TUN_BIN" || check_warn "出口二进制不存在，启动 tun2socks 出口模式时会下载。"
+  command -v wg >/dev/null 2>&1 && check_ok "wg 命令可用" || check_warn "未找到 wg 命令，WireGuard 模式需要 wireguard-tools。"
+  command -v wg-quick >/dev/null 2>&1 && check_ok "wg-quick 命令可用" || check_warn "未找到 wg-quick 命令，WireGuard 模式需要 wireguard-tools。"
+  [ -f "$GOST_SERVICE" ] && check_ok "入口 SOCKS5 systemd unit 存在" || check_warn "入口 SOCKS5 systemd unit 不存在。"
+  [ -f "$TUN_SERVICE" ] && check_ok "出口 tun2socks systemd unit 存在" || check_warn "出口 tun2socks systemd unit 不存在。"
+  [ -f "$WG_SERVICE" ] && check_ok "WireGuard systemd unit 存在" || check_warn "WireGuard systemd unit 不存在。"
 
   if [ -f "$ROUTES_UP" ] && [ -f "$ROUTES_DOWN" ]; then
     bash -n "$ROUTES_UP" && bash -n "$ROUTES_DOWN" && check_ok "路由脚本语法正常" || check_fail "路由脚本语法异常。"
@@ -1729,7 +2316,9 @@ doctor_check() {
   fi
 
   if [ "$mode" = "v4" ] || [ "$mode" = "dual" ]; then
-    preflight_tun_runtime && check_ok "出口 runtime preflight 通过" || check_fail "出口 runtime preflight 失败。"
+    preflight_tun_runtime && check_ok "出口 tun2socks runtime preflight 通过" || check_fail "出口 tun2socks runtime preflight 失败。"
+  elif [[ "$mode" =~ ^wg- ]]; then
+    preflight_wg_runtime && check_ok "出口 WireGuard runtime preflight 通过" || check_fail "出口 WireGuard runtime preflight 失败。"
   else
     check_warn "当前不是出口模式，跳过出口 runtime preflight。"
   fi
@@ -1747,11 +2336,17 @@ menu_action_label() {
   local type="$1" mode="$(current_mode)"
   case "$type" in
     server)
-      if server_active; then echo "关闭入口模式"; else echo "启动入口模式"; fi ;;
+      if server_active; then echo "关闭 SOCKS5 入口"; else echo "启动 SOCKS5 入口"; fi ;;
+    wg-server)
+      if wg_server_active; then echo "关闭 WireGuard 入口"; else echo "启动 WireGuard 入口"; fi ;;
     v4)
       if tun_active && [ "$mode" = "v4" ]; then echo "关闭 V4 单栈模式"; else echo "启动 V4 单栈模式"; fi ;;
     dual)
       if tun_active && [ "$mode" = "dual" ]; then echo "关闭 V4+V6 双栈模式"; else echo "启动 V4+V6 双栈模式"; fi ;;
+    wg-v4)
+      if wg_client_active && [ "$mode" = "wg-v4" ]; then echo "关闭 WG-V4 单栈"; else echo "启动 WG-V4 单栈"; fi ;;
+    wg-dual)
+      if wg_client_active && [ "$mode" = "wg-dual" ]; then echo "关闭 WG-V4+V6 双栈"; else echo "启动 WG-V4+V6 双栈"; fi ;;
   esac
 }
 
@@ -1760,43 +2355,65 @@ menu() {
   echo -e "${BLUE}====================================================${NC}"
   echo -e "${BLUE}                 getout 管理面板${NC}"
   echo -e "${BLUE}====================================================${NC}"
-  echo "1.$(menu_action_label server)"
-  echo "2.修改入口信息"
-  echo "3.$(menu_action_label v4)"
-  echo "4.$(menu_action_label dual)"
-  echo "5.修改出口信息"
-  echo "6.$(priority_action_label)"
-  echo "7.查看状态"
-  echo "8.重启 getout"
-  echo "9.更新 getout"
-  echo "10.卸载 getout"
-  echo "11.退出"
+  echo "--- 入口模式 ---"
+  echo "  1.$(menu_action_label server)"
+  echo "  2.$(menu_action_label wg-server)"
+  echo "  3.修改入口信息"
+  echo "--- 出口模式 ---"
+  echo "  4.$(menu_action_label v4)"
+  echo "  5.$(menu_action_label dual)"
+  echo "  6.$(menu_action_label wg-v4)"
+  echo "  7.$(menu_action_label wg-dual)"
+  echo "  8.修改出口信息"
+  echo "  9.$(priority_action_label)"
+  echo "--- 管理 ---"
+  echo "  10.查看状态"
+  echo "  11.重启 getout"
+  echo "  12.更新 getout"
+  echo "  13.卸载 getout"
+  echo "  14.退出"
   echo
-  read -rp "请选择 [1-11]: " choice
+  read -rp "请选择 [1-14]: " choice
   case "$choice" in
     1) if server_active; then stop_server; else start_server; fi ;;
-    2) configure_server ;;
-    3) if client_mode_active v4; then stop_client; else start_client v4; fi ;;
-    4) if client_mode_active dual; then stop_client; else start_client dual; fi ;;
-    5) configure_client ;;
-    6) switch_priority_mode ;;
-    7) status ;;
-    8) restart_getout ;;
-    9) update_getout ;;
-    10) read -rp "确认卸载 getout? [y/N]: " yn; [[ "$yn" =~ ^[Yy]$ ]] && uninstall_all || echo "已取消" ;;
-    11) exit 0 ;;
+    2) if wg_server_active; then stop_wg_server; else start_wg_server; fi ;;
+    3)
+      echo -e "${BLUE}修改入口模式:${NC}"
+      echo "  a. SOCKS5 入口"
+      echo "  b. WireGuard 入口"
+      read -rp "请选择 [a/b]: " entry_choice
+      case "$entry_choice" in
+        a) configure_server ;;
+        b) configure_wg_server ;;
+        *) fatal "无效选项。" ;;
+      esac
+      ;;
+    4) if client_mode_active v4; then stop_client; else start_client v4; fi ;;
+    5) if client_mode_active dual; then stop_client; else start_client dual; fi ;;
+    6) if client_mode_active wg-v4; then stop_client; else start_wg_client wg-v4; fi ;;
+    7) if client_mode_active wg-dual; then stop_client; else start_wg_client wg-dual; fi ;;
+    8) configure_client ;;
+    9) switch_priority_mode ;;
+    10) status ;;
+    11) restart_getout ;;
+    12) update_getout ;;
+    13) read -rp "确认卸载 getout? [y/N]: " yn; [[ "$yn" =~ ^[Yy]$ ]] && uninstall_all || echo "已取消" ;;
+    14) exit 0 ;;
     *) fatal "无效选项。" ;;
   esac
 }
 
 usage() {
   cat <<EOF
-用法：getout [server|v4|dual|stop|restart|status|doctor|check|update|uninstall]
+用法：getout [server|wg-server|v4|dual|wg-v4|wg-dual|stop|restart|status|doctor|check|update|uninstall]
 
-server     启动入口模式，复用已有入口配置；没有配置时询问
-v4         启动 V4 单栈出口模式，复用已有出口配置；没有配置时询问
-dual       启动 V4+V6 双栈出口模式，复用已有出口配置；没有配置时询问
-stop       关闭当前运行中的 getout 模式，并关闭对应自启动
+server     启动 SOCKS5 入口模式
+wg-server  启动 WireGuard 入口模式
+v4         启动 V4 单栈出口模式 (tun2socks)
+dual       启动 V4+V6 双栈出口模式 (tun2socks)
+wg-v4      启动 WireGuard V4 单栈出口模式
+wg-dual    启动 WireGuard V4+V6 双栈出口模式
+stop       关闭当前运行中的 getout 模式
 restart    重启当前运行中的 getout 模式
 status     查看状态
 doctor     检查系统环境、配置权限、服务文件和出口预检
@@ -1809,7 +2426,11 @@ EOF
 stop_current() {
   if server_active; then
     stop_server
+  elif wg_server_active; then
+    stop_wg_server
   elif tun_active; then
+    stop_client
+  elif wg_client_active; then
     stop_client
   else
     warn "当前 getout 未运行。"
@@ -1832,8 +2453,11 @@ main() {
 
   case "${1:-}" in
     server) start_server ;;
+    wg-server) start_wg_server ;;
     v4) start_client v4 ;;
     dual) start_client dual ;;
+    wg-v4) start_wg_client wg-v4 ;;
+    wg-dual) start_wg_client wg-dual ;;
     stop) stop_current ;;
     restart) restart_getout ;;
     status) status ;;

@@ -15,7 +15,7 @@ install_deps() {
   local missing=() cmd pkg
   declare -A map=(
     [curl]=curl [gzip]=gzip [gunzip]=gzip [ip]=iproute2 [ss]=iproute2 [nft]=nftables
-    [systemctl]=systemd [sysctl]=procps [awk]=mawk [grep]=grep [sed]=sed
+    [systemctl]=systemd [sysctl]=procps [awk]=mawk [grep]=grep [sed]=sed [wg]=wireguard-tools [modprobe]=kmod
   )
   for cmd in "${!map[@]}"; do
     command -v "$cmd" >/dev/null 2>&1 || missing+=("${map[$cmd]}")
@@ -29,6 +29,17 @@ install_deps() {
 
 ensure_tun() {
   [ -c /dev/net/tun ] || fatal "未检测到 /dev/net/tun，请先在 VPS 控制面板开启 TUN。"
+}
+
+ensure_wgmod() {
+  if ! lsmod 2>/dev/null | grep -q '^wireguard\b'; then
+    modprobe wireguard 2>/dev/null || fatal "无法加载 WireGuard 内核模块 (wireguard.ko)，请确认内核版本 >= 5.6 或已安装 wireguard-dkms。"
+  fi
+}
+
+ensure_wg() {
+  command -v wg >/dev/null 2>&1 || fatal "未找到 wg 命令，请先安装 wireguard-tools：apt install wireguard-tools"
+  ensure_wgmod
 }
 
 arch_gost() {
@@ -129,4 +140,10 @@ download_hev() {
   install -m 0755 "$tmp" "$TUN_BIN"
   rm -f "$tmp"
   trap - RETURN
+}
+
+download_wg_service() {
+  # WireGuard 使用系统自带的 wg-quick@.service，无需下载额外二进制。
+  # 此函数仅用于确认 wg-quick 命令可用。
+  command -v wg-quick >/dev/null 2>&1 || fatal "未找到 wg-quick 命令，请先安装 wireguard-tools：apt install wireguard-tools"
 }
