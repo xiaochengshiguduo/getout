@@ -1,14 +1,16 @@
 # getout
 
-`getout` 是一个 Debian VPS 代理出口管理脚本，用于快速配置入口 SOCKS5 服务、本机 IPv4 出口代理、以及 IPv4+IPv6 双栈出口代理。
+`getout` 是一个 Debian VPS 代理出口管理脚本，支持 SOCKS5 和 WireGuard 两种传输协议，用于快速配置入口代理服务、本机 IPv4 出口代理、以及 IPv4+IPv6 双栈出口代理。
 
 它把入口代理、出口代理、路由接管、DNS 切换、systemd 服务和交互式管理面板整合到一个全局命令里。
 
 ## 功能
 
 - 入口模式：使用 `gost` 在当前 VPS 上启动带用户名密码认证的 SOCKS5 服务端。
+- WireGuard 入口模式：在当前 VPS 上启动 WireGuard 隧道服务端，支持 ICMP 流量。
 - V4 单栈模式：使用 `hev-socks5-tunnel` 接管本机 IPv4 流量，IPv6 保持原生。
 - V4+V6 双栈模式：使用 `hev-socks5-tunnel` 同时接管本机 IPv4 和 IPv6 流量。
+- WireGuard V4/Dual 出口模式：通过 WireGuard 隧道接管流量，支持 ICMP，解决 tun2socks 无法代理 ICMP 的限制。
 - 全局命令：首次运行后自动安装 `/usr/local/bin/getout`，之后直接输入 `getout` 打开管理面板。
 - 一键更新：支持 `getout update` 或在管理面板选择 `9.更新 getout`。
 - V4/V6 优先模式：可在管理面板动态切换 V4 优先或 V6 优先，默认 V6 优先。
@@ -25,6 +27,7 @@
 - root 权限
 - `/dev/net/tun` 可用
 - systemd
+- `wireguard-tools`（WireGuard 模式需要，脚本会自动安装）
 - 支持 IPv4、IPv6 或双栈 VPS
 
 ## 快速使用
@@ -50,12 +53,15 @@ getout
 也可以直接运行指定命令：
 
 ```bash
-getout server
-getout v4
-getout dual
-getout status
+getout server     # SOCKS5 入口模式
+getout wg-server  # WireGuard 入口模式
+getout v4         # V4 单栈出口 (tun2socks)
+getout dual       # V4+V6 双栈出口 (tun2socks)
+getout wg-v4      # WireGuard V4 单栈出口
+getout wg-dual    # WireGuard V4+V6 双栈出口
 getout stop
 getout restart
+getout status
 getout update
 getout doctor
 getout uninstall
@@ -67,32 +73,38 @@ getout uninstall
 ====================================================
                  getout 管理面板
 ====================================================
-1.启动入口模式
-2.修改入口信息
-3.启动 V4 单栈模式
-4.启动 V4+V6 双栈模式
-5.修改出口信息
-6.切换至 V4 优先模式
-7.查看状态
-8.重启 getout
-9.更新 getout
-10.卸载 getout
-11.退出
+1.启动 SOCKS5 入口模式
+2.启动 WireGuard 入口模式
+3.修改入口信息
+4.启动 V4 单栈模式 (tun2socks)
+5.启动 V4+V6 双栈模式 (tun2socks)
+6.启动 WireGuard V4 单栈模式
+7.启动 WireGuard V4+V6 双栈模式
+8.修改出口信息
+9.切换至 V4 优先模式
+10.查看状态
+11.重启 getout
+12.更新 getout
+13.卸载 getout
+14.退出
 
-请选择 [1-11]:
+请选择 [1-14]:
 ```
 
 菜单会根据当前运行状态动态显示明确动作，例如：
 
-- `关闭入口模式`
+- `关闭 SOCKS5 入口模式`
+- `关闭 WireGuard 入口模式`
 - `关闭 V4 单栈模式`
 - `关闭 V4+V6 双栈模式`
+- `关闭 WireGuard V4 单栈模式`
+- `关闭 WireGuard V4+V6 双栈模式`
 - `切换至 V4 优先模式`
 - `切换至 V6 优先模式`
 
 ## 模式说明
 
-### 入口模式
+### 入口模式（SOCKS5）
 
 当前 VPS 作为 SOCKS5 服务端，对外提供代理入口。
 
@@ -110,6 +122,27 @@ getout-gost.service
 /etc/getout/server.conf
 ```
 
+### 入口模式（WireGuard）
+
+当前 VPS 作为 WireGuard 服务端，通过内核级 WireGuard 隧道提供代理入口。
+
+需要手动配置：服务端私钥、监听端口、隧道地址、对端公钥和对端隧道地址。
+
+WireGuard 入口支持 ICMP 流量转发，这是相比 SOCKS5 的主要优势。
+
+对应服务：
+
+```text
+getout-wg.service
+```
+
+配置文件：
+
+```text
+/etc/getout/server.conf
+/etc/getout/wireguard.conf (生成)
+```
+
 ### V4 单栈模式
 
 通过上游 SOCKS5 接管本机 IPv4 流量，IPv6 保持原生。
@@ -121,6 +154,30 @@ getout-gost.service
 通过上游 SOCKS5 同时接管本机 IPv4 和 IPv6 流量。
 
 适合：希望当前 VPS 的公网流量统一走指定 SOCKS5 出口。
+
+### WireGuard V4/Dual 出口模式
+
+通过 WireGuard 隧道接管本机流量。支持 V4 单栈和 V4+V6 双栈两种子模式。
+
+相比 tun2socks 模式的主要优势：
+- 支持 ICMP 流量（`ping` 可用）
+- 内核级实现，性能更好
+- UDP 原生支持
+
+需要输入完整的 WireGuard 参数：服务器地址/端口、客户端私钥、服务端公钥、隧道地址、DNS 等。
+
+对应服务：
+
+```text
+getout-wg.service
+```
+
+配置文件：
+
+```text
+/etc/getout/client.conf
+/etc/getout/wireguard.conf (生成)
+```
 
 ## V4/V6 优先模式与 DNS 策略
 
@@ -147,15 +204,15 @@ V6 优先模式会：
 
 ## 路由保护
 
-出口模式会接管本机主动出站流量，同时保护关键回包不被错误送入 `tun0`：
+出口模式会接管本机主动出站流量。tun2socks 模式通过 TUN 设备接管，WireGuard 模式通过内核 WireGuard 接口接管。两种模式均保护关键回包不被错误路由：
 
 - 自动检测 SSH 实际监听端口并保护 SSH 回包，不依赖 SSH 是否使用 22 端口；
 - 启动或重启出口模式前会显示 SSH 回包保护检测结果，检测不足时会给出断联风险警告；
 - 保护上游 SOCKS5 和运行期 DNS 路由，避免代理回环；
 - 使用 nftables/conntrack 保护外部主动连入本机的连接回包，避免影响 sing-box、xray、hysteria、tuic、nginx 等本机入站服务；
-- 出口模式启动前会校验 nftables 入站回包保护是否可用，校验失败会停止启动，避免保护未生效却静默运行。
+- tun2socks 出口模式启动前会校验 nftables 入站回包保护是否可用，校验失败会停止启动，避免保护未生效却静默运行。
 
-`ping`/ICMP 不经过 SOCKS 出口代理，`ping` 不通不代表 TCP/UDP 出口不可用。建议使用 `curl` 或应用自身连接测试确认出口状态。
+`ping`/ICMP 不经过 SOCKS 出口代理（tun2socks 模式），`ping` 不通不代表 TCP/UDP 出口不可用。使用 WireGuard 出口模式时 ICMP 正常工作。建议使用 `curl` 或应用自身连接测试确认出口状态。
 
 ## 文件位置
 
@@ -163,7 +220,8 @@ V6 优先模式会：
 /etc/getout/mode
 /etc/getout/server.conf
 /etc/getout/client.conf
-/etc/getout/tun2socks.yaml
+/etc/getout/tun2socks.yaml           # tun2socks 模式配置（生成）
+/etc/getout/wireguard.conf           # WireGuard 模式配置（生成）
 /etc/getout/routes-up.sh
 /etc/getout/routes-down.sh
 /etc/getout/resolv.conf.orig
@@ -174,10 +232,11 @@ V6 优先模式会：
 /etc/getout/gai.conf.getout
 /etc/getout/gai.conf.meta
 /usr/local/bin/getout
-/usr/local/bin/getout-gost
-/usr/local/bin/getout-tun2socks
+/usr/local/bin/getout-gost           # SOCKS5 入口二进制
+/usr/local/bin/getout-tun2socks      # tun2socks 出口二进制
 /etc/systemd/system/getout-gost.service
 /etc/systemd/system/getout-tun.service
+/etc/systemd/system/getout-wg.service
 ```
 
 ## 更新
@@ -248,7 +307,8 @@ getout check
 
 `doctor` 会检查：
 
-- root 权限、Debian、systemd、TUN、iproute2、nftables、curl、sha256sum；
+- root 权限、Debian、systemd、TUN、iproute2、curl、sha256sum；
+- `wireguard-tools`（`wg`/`wg-quick` 命令）是否可用；
 - `/etc/getout` 和配置文件权限；
 - 入口/出口二进制和 systemd unit 是否存在；
 - 生成的路由脚本语法；
@@ -262,7 +322,7 @@ getout uninstall
 
 卸载会：
 
-- 停止入口/出口服务；
+- 停止所有入口/出口服务（含 WireGuard）；
 - 清理路由规则；
 - 恢复 DNS 和 `/etc/gai.conf`；
 - 即使生成的 `routes-down.sh` 缺失或损坏，也会尝试兜底清理 getout 相关路由规则、table 20 默认路由和 nft 表；
@@ -304,6 +364,8 @@ tests/run.sh
 ## 注意事项
 
 - 仅支持 Debian。
+- WireGuard 模式需要 `wireguard-tools`，脚本会自动安装；需要自行生成或提供密钥对。
+- WireGuard 出口模式下 `ping`/ICMP 正常工作，不受 tun2socks 限制。
 - 脚本会在常规下载失败后临时修改 `/etc/resolv.conf` 使用 DNS64，DNS64 下载结束后恢复。
 - 出口模式运行时会临时修改 `/etc/resolv.conf` 和 `/etc/gai.conf`，停止或卸载时恢复。
 - `/etc/resolv.conf` 和 `/etc/gai.conf` 的恢复依赖首次接管前保存的原始备份和 checksum；如果备份缺失或运行期间被外部修改，脚本会警告并避免盲目覆盖当前内容。
@@ -318,7 +380,7 @@ tests/run.sh
 ## 已知限制与排障
 
 - 交互录入和 `status` 会明文显示入口/出口密码，这是为了在可信终端快速核对配置；不要把状态页截图或日志发到公开场所。
-- `ping`/ICMP 不经过 SOCKS 出口代理，排障时请优先使用 `curl` 或真实应用连接测试。
+- `ping`/ICMP 不经过 SOCKS 出口代理（tun2socks 模式），排障时请优先使用 `curl` 或真实应用连接测试。WireGuard 出口模式下 ICMP 正常工作。
 - `/etc/resolv.conf` 若由 systemd-resolved、NetworkManager、VPS 面板等外部组件并发管理，getout 会尽量保留外部修改并报警；遇到 DNS 异常时先检查 `/etc/getout/resolv.conf.*` 和当前 `/etc/resolv.conf`。
 - 出口模式依赖 TUN、nftables、conntrack/fib 规则能力；如果 `getout doctor` 或启动 preflight 失败，请先按错误提示处理内核/系统能力问题。
 - 更新后如果服务正在运行，建议执行 `getout restart`，让 systemd unit 和路由脚本刷新到最新版本。
@@ -334,6 +396,7 @@ tests/run.sh
 - IPv4 VPS
 - `gost v2.11.5`
 - `hev-socks5-tunnel 2.15.0`
+- `wireguard-tools 1.0.20210223`
 
 ## License
 
