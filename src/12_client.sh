@@ -109,14 +109,24 @@ ask_wg_config() {
   server_port="${server_port:-$DEFAULT_WG_PORT}"
   [[ "$server_port" =~ ^[0-9]+$ ]] && [ "$server_port" -ge 1 ] && [ "$server_port" -le 65535 ] || fatal "端口无效：$server_port"
 
-  read -rp "请输入客户端私钥 (PrivateKey): " client_private_key
-  [ -n "$client_private_key" ] || fatal "客户端私钥不能为空。"
+  read -rp "请输入客户端私钥 (PrivateKey) [留空自动生成]: " client_private_key
+  if [ -z "$client_private_key" ]; then
+    client_private_key="$(wg genkey)" || fatal "生成私钥失败，请确认 wireguard-tools 已安装。"
+    local derived_pub
+    derived_pub="$(printf '%s' "$client_private_key" | wg pubkey)" || fatal "派生公钥失败。"
+    echo "  已自动生成私钥: $client_private_key"
+    echo "  对应公钥 (服务端需填入): $derived_pub"
+    echo ""
+  fi
 
   read -rp "请输入客户端隧道地址/掩码 [默认: 10.66.66.2/24]: " client_address
   client_address="${client_address:-10.66.66.2/24}"
 
-  read -rp "请输入服务端公钥 (PublicKey): " server_public_key
-  [ -n "$server_public_key" ] || fatal "服务端公钥不能为空。"
+  read -rp "请输入服务端公钥 (PublicKey) [留空跳过，后续手动配置]: " server_public_key
+  if [ -z "$server_public_key" ]; then
+    server_public_key="PLACEHOLDER_SERVER_PUBLIC_KEY"
+    warn "已跳过服务端公钥，请在获取服务端公钥后编辑 /etc/getout/client.conf 替换 WG_SERVER_PUBLIC_KEY。"
+  fi
 
   read -rp "预共享密钥 (PresharedKey) [可留空]: " psk
 

@@ -185,14 +185,24 @@ prompt_wg_server_info() {
   listen_port="${listen_port:-$DEFAULT_WG_PORT}"
   [[ "$listen_port" =~ ^[0-9]+$ ]] && [ "$listen_port" -ge 1 ] && [ "$listen_port" -le 65535 ] || fatal "端口无效：$listen_port"
 
-  read -rp "请输入服务端私钥 (PrivateKey): " private_key
-  [ -n "$private_key" ] || fatal "私钥不能为空。"
+  read -rp "请输入服务端私钥 (PrivateKey) [留空自动生成]: " private_key
+  if [ -z "$private_key" ]; then
+    private_key="$(wg genkey)" || fatal "生成私钥失败，请确认 wireguard-tools 已安装。"
+    local derived_pub
+    derived_pub="$(printf '%s' "$private_key" | wg pubkey)" || fatal "派生公钥失败。"
+    echo "  已自动生成私钥: $private_key"
+    echo "  对应公钥 (客户端需填入): $derived_pub"
+    echo ""
+  fi
 
   read -rp "请输入服务端隧道地址/掩码 [默认: ${DEFAULT_WG_ADDRESS}]: " address
   address="${address:-$DEFAULT_WG_ADDRESS}"
 
-  read -rp "请输入对端公钥 (Peer PublicKey): " peer_public_key
-  [ -n "$peer_public_key" ] || fatal "对端公钥不能为空。"
+  read -rp "请输入对端公钥 (Peer PublicKey) [留空跳过，后续手动配置]: " peer_public_key
+  if [ -z "$peer_public_key" ]; then
+    peer_public_key="PLACEHOLDER_PEER_PUBLIC_KEY"
+    warn "已跳过对端公钥，请在获取客户端公钥后编辑 /etc/getout/server.conf 替换 PEER_PUBLIC_KEY。"
+  fi
 
   read -rp "请输入对端允许的 IP (AllowedIPs) [默认: 0.0.0.0/0,::/0]: " allowed_ips
   allowed_ips="${allowed_ips:-0.0.0.0/0,::/0}"
