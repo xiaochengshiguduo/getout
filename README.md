@@ -128,9 +128,13 @@ getout-gost.service
 
 当前 VPS 作为 WireGuard 服务端，通过内核级 WireGuard 隧道提供代理入口。
 
-需要手动配置：服务端私钥、监听端口、隧道地址、对端公钥和对端隧道地址。
+配置参数：监听地址、监听端口、隧道地址、对端 AllowedIPs。
 
-WireGuard 模式支持 ICMP 流量转发，这是相比 SOCKS5 的主要优势。
+密钥处理：
+- 服务端私钥留空回车自动生成，同时显示派生公钥（需复制到客户端配置）
+- 对端公钥留空可跳过，后续获取客户端公钥后手动编辑 `/etc/getout/server.conf` 替换 `PEER_PUBLIC_KEY`
+
+支持 ICMP 流量转发，这是相比 SOCKS5 的主要优势。
 
 对应服务：
 
@@ -166,7 +170,11 @@ getout-wg.service
 - 内核级实现，性能更好
 - UDP 原生支持
 
-需要输入完整的 WireGuard 参数：服务器地址/端口、客户端私钥、服务端公钥、隧道地址、DNS 等。
+配置参数：服务器地址/端口、隧道地址、DNS、PresharedKey（可选）。
+
+密钥处理：
+- 客户端私钥留空回车自动生成，同时显示派生公钥（需复制到服务端配置）
+- 服务端公钥留空可跳过，后续获取服务端公钥后手动编辑 `/etc/getout/client.conf` 替换 `WG_SERVER_PUBLIC_KEY`
 
 对应服务：
 
