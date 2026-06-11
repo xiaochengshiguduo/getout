@@ -1325,9 +1325,9 @@ prompt_wg_server_info() {
   ensure_conf_dir
   local listen_addr listen_port private_key address peer_public_key allowed_ips
 
-  read -rp "请输入 WireGuard 监听地址 [默认: 0.0.0.0]: " listen_addr
-  listen_addr="${listen_addr:-0.0.0.0}"
-  [[ "$listen_addr" =~ ^[0-9a-fA-F.:]+$ ]] || fatal "地址无效：$listen_addr"
+  read -rp "请输入 WireGuard 监听地址 [默认: :: (双栈)]: " listen_addr
+  listen_addr="${listen_addr:-::}"
+  [[ "$listen_addr" =~ ^[0-9a-fA-F.:]+$ ]] || [[ "$listen_addr" == "::" ]] || fatal "地址无效：$listen_addr"
 
   read -rp "请输入 WireGuard 监听端口 [默认: ${DEFAULT_WG_PORT}]: " listen_port
   listen_port="${listen_port:-$DEFAULT_WG_PORT}"
@@ -1381,7 +1381,7 @@ write_wg_server_service() {
   [ -n "${PRIVATE_KEY:-}" ] || fatal "入口配置缺少 PRIVATE_KEY。"
   [ -n "${PEER_PUBLIC_KEY:-}" ] || fatal "入口配置缺少 PEER_PUBLIC_KEY。"
 
-  local listen_addr="${LISTEN_ADDRESS:-0.0.0.0}"
+  local listen_addr="${LISTEN_ADDRESS:-::}"
   local peer_allowed="${ALLOWED_IPS:-0.0.0.0/0,::/0}"
 
   # 写入 WireGuard 配置文件
