@@ -56,7 +56,7 @@ DNS64_SERVERS=(
 )
 DEFAULT_WG_PORT="51820"
 DEFAULT_WG_ADDRESS="10.66.66.1/24"
-DEFAULT_WG_DNS="10.66.66.1"
+DEFAULT_WG_DNS=""
 
 # =============================================================================
 # Maintainer map

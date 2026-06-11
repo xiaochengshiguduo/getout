@@ -225,6 +225,7 @@ prompt_wg_server_info() {
   echo -e "  私钥: ${BLUE}${peer_private}${NC}"
   echo -e "  地址: ${BLUE}$(main_ipv6 || main_ipv4 || echo '<本机IP>')${NC}"
   echo -e "  端口: ${BLUE}${listen_port}${NC}"
+  echo -e "  隧道: ${BLUE}${address%.*}.2/32${NC}"
   echo -e "${GREEN}========================================${NC}"
 }
 
