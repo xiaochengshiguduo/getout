@@ -198,10 +198,15 @@ prompt_wg_server_info() {
   read -rp "请输入服务端隧道地址/掩码 [默认: ${DEFAULT_WG_ADDRESS}]: " address
   address="${address:-$DEFAULT_WG_ADDRESS}"
 
-  read -rp "请输入对端公钥 (Peer PublicKey) [留空跳过，后续手动配置]: " peer_public_key
+  read -rp "请输入对端公钥 (Peer PublicKey) [留空自动生成客户端密钥对]: " peer_public_key
   if [ -z "$peer_public_key" ]; then
-    peer_public_key="PLACEHOLDER_PEER_PUBLIC_KEY"
-    warn "已跳过对端公钥，请在获取客户端公钥后编辑 /etc/getout/server.conf 替换 PEER_PUBLIC_KEY。"
+    local peer_private
+    peer_private="$(wg genkey)" || fatal "生成对端私钥失败。"
+    peer_public_key="$(printf '%s' "$peer_private" | wg pubkey)" || fatal "派生对端公钥失败。"
+    echo "  已自动生成客户端密钥对:"
+    echo "    客户端私钥 (请复制到客户端配置): $peer_private"
+    echo "    客户端公钥: $peer_public_key"
+    echo ""
   fi
 
   read -rp "请输入对端允许的 IP (AllowedIPs) [默认: 0.0.0.0/0,::/0]: " allowed_ips
