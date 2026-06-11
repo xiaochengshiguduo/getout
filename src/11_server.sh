@@ -170,7 +170,7 @@ install_server() {
   start_server
 }
 
-# --- WireGuard 入口模式 ---
+# --- WireGuard 模式 ---
 
 prompt_wg_server_info() {
   require_root; require_debian; install_deps
@@ -271,13 +271,13 @@ start_wg_server() {
   else
     if [ ! -t 0 ]; then
       restore_server_or_warn "$snapshot"
-      fatal "未找到 WireGuard 入口配置，请先交互运行 getout wg-server 或在菜单中选择 2 配置。"
+      fatal "未找到 WireGuard 配置，请先交互运行 getout wg-server 或在菜单中选择 2 配置。"
     fi
     prompt_wg_server_info
   fi
   [ -f "$SERVER_CONF" ] && grep -q '^SERVER_MODE=wireguard' "$SERVER_CONF" || {
     restore_server_or_warn "$snapshot"
-    fatal "WireGuard 入口配置无效。"
+    fatal "WireGuard 配置无效。"
   }
   write_wg_server_service
   echo "wg-server" > "$MODE_FILE"

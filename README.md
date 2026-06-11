@@ -7,7 +7,7 @@
 ## 功能
 
 - 入口模式：使用 `gost` 在当前 VPS 上启动带用户名密码认证的 SOCKS5 服务端。
-- WireGuard 入口：在当前 VPS 上启动 WireGuard 隧道服务端，支持 ICMP 流量。
+- WireGuard 模式：在当前 VPS 上启动 WireGuard 隧道服务端，支持 ICMP 流量。
 - V4 单栈模式：使用 `hev-socks5-tunnel` 接管本机 IPv4 流量，IPv6 保持原生。
 - V4+V6 双栈模式：使用 `hev-socks5-tunnel` 同时接管本机 IPv4 和 IPv6 流量。
 - WireGuard V4/Dual 出口：通过 WireGuard 隧道接管流量，支持 ICMP，解决 tun2socks 无法代理 ICMP 的限制。
@@ -53,8 +53,8 @@ getout
 也可以直接运行指定命令：
 
 ```bash
-getout server     # SOCKS5 入口
-getout wg-server  # WireGuard 入口
+getout server     # SOCKS5 模式
+getout wg-server  # WireGuard 模式
 getout v4         # s5-V4 单栈出口 (tun2socks)
 getout dual       # s5-V4+V6 双栈出口 (tun2socks)
 getout wg-v4      # WG-V4 单栈出口
@@ -73,8 +73,8 @@ getout uninstall
 ====================================================
                  getout 管理面板
 ====================================================
-1.启动 SOCKS5 入口
-2.启动 WireGuard 入口
+1.启动 SOCKS5 模式
+2.启动 WireGuard 模式
 3.修改入口信息
 4.启动 s5-V4 单栈模式 (tun2socks)
 5.启动 s5-V4+V6 双栈模式 (tun2socks)
@@ -93,8 +93,8 @@ getout uninstall
 
 菜单会根据当前运行状态动态显示明确动作，例如：
 
-- `关闭 SOCKS5 入口`
-- `关闭 WireGuard 入口`
+- `关闭 SOCKS5 模式`
+- `关闭 WireGuard 模式`
 - `关闭 V4 单栈模式`
 - `关闭 V4+V6 双栈模式`
 - `关闭 WireGuard V4 单栈模式`
@@ -128,7 +128,7 @@ getout-gost.service
 
 需要手动配置：服务端私钥、监听端口、隧道地址、对端公钥和对端隧道地址。
 
-WireGuard 入口支持 ICMP 流量转发，这是相比 SOCKS5 的主要优势。
+WireGuard 模式支持 ICMP 流量转发，这是相比 SOCKS5 的主要优势。
 
 对应服务：
 
@@ -232,7 +232,7 @@ V6 优先模式会：
 /etc/getout/gai.conf.getout
 /etc/getout/gai.conf.meta
 /usr/local/bin/getout
-/usr/local/bin/getout-gost           # SOCKS5 入口二进制
+/usr/local/bin/getout-gost           # SOCKS5 模式二进制
 /usr/local/bin/getout-tun2socks      # tun2socks 出口二进制
 /etc/systemd/system/getout-gost.service
 /etc/systemd/system/getout-tun.service

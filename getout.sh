@@ -1318,7 +1318,7 @@ install_server() {
   start_server
 }
 
-# --- WireGuard 入口模式 ---
+# --- WireGuard 模式 ---
 
 prompt_wg_server_info() {
   require_root; require_debian; install_deps
@@ -1419,13 +1419,13 @@ start_wg_server() {
   else
     if [ ! -t 0 ]; then
       restore_server_or_warn "$snapshot"
-      fatal "未找到 WireGuard 入口配置，请先交互运行 getout wg-server 或在菜单中选择 2 配置。"
+      fatal "未找到 WireGuard 配置，请先交互运行 getout wg-server 或在菜单中选择 2 配置。"
     fi
     prompt_wg_server_info
   fi
   [ -f "$SERVER_CONF" ] && grep -q '^SERVER_MODE=wireguard' "$SERVER_CONF" || {
     restore_server_or_warn "$snapshot"
-    fatal "WireGuard 入口配置无效。"
+    fatal "WireGuard 配置无效。"
   }
   write_wg_server_service
   echo "wg-server" > "$MODE_FILE"
@@ -2305,7 +2305,7 @@ doctor_check() {
     check_warn "出口配置不存在。"
   fi
 
-  [ -x "$GOST_BIN" ] && check_ok "入口二进制存在：$GOST_BIN" || check_warn "入口二进制不存在，启动 SOCKS5 入口时会下载。"
+  [ -x "$GOST_BIN" ] && check_ok "入口二进制存在：$GOST_BIN" || check_warn "入口二进制不存在，启动 SOCKS5 模式时会下载。"
   [ -x "$TUN_BIN" ] && check_ok "出口二进制存在：$TUN_BIN" || check_warn "出口二进制不存在，启动 tun2socks 出口时会下载。"
   command -v wg >/dev/null 2>&1 && check_ok "wg 命令可用" || check_warn "未找到 wg 命令，WireGuard 模式需要 wireguard-tools。"
   command -v wg-quick >/dev/null 2>&1 && check_ok "wg-quick 命令可用" || check_warn "未找到 wg-quick 命令，WireGuard 模式需要 wireguard-tools。"
@@ -2340,9 +2340,9 @@ menu_action_label() {
   local type="$1" mode="$(current_mode)"
   case "$type" in
     server)
-      if server_active; then echo "关闭 SOCKS5 入口"; else echo "启动 SOCKS5 入口"; fi ;;
+      if server_active; then echo "关闭 SOCKS5 模式"; else echo "启动 SOCKS5 模式"; fi ;;
     wg-server)
-      if wg_server_active; then echo "关闭 WireGuard 入口"; else echo "启动 WireGuard 入口"; fi ;;
+      if wg_server_active; then echo "关闭 WireGuard 模式"; else echo "启动 WireGuard 模式"; fi ;;
     v4)
       if tun_active && [ "$mode" = "v4" ]; then echo "关闭 s5-V4 单栈模式"; else echo "启动 s5-V4 单栈模式"; fi ;;
     dual)
@@ -2383,8 +2383,8 @@ menu() {
     2) if wg_server_active; then stop_wg_server; else start_wg_server; fi ;;
     3)
       echo -e "${BLUE}修改入口:${NC}"
-      echo "  a. SOCKS5 入口"
-      echo "  b. WireGuard 入口"
+      echo "  a. SOCKS5 模式"
+      echo "  b. WireGuard 模式"
       read -rp "请选择 [a/b]: " entry_choice
       case "$entry_choice" in
         a) configure_server ;;
@@ -2411,8 +2411,8 @@ usage() {
   cat <<EOF
 用法：getout [server|wg-server|v4|dual|wg-v4|wg-dual|stop|restart|status|doctor|check|update|uninstall]
 
-server     启动 SOCKS5 入口
-wg-server  启动 WireGuard 入口
+server     启动 SOCKS5 模式
+wg-server  启动 WireGuard 模式
 v4         启动 s5-V4 单栈出口模式 (tun2socks)
 dual       启动 s5-V4+V6 双栈出口模式 (tun2socks)
 wg-v4      启动 WG-V4 单栈出口模式
