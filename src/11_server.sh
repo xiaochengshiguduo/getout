@@ -198,8 +198,8 @@ prompt_wg_server_info() {
   read -rp "请输入服务端隧道地址/掩码 [默认: ${DEFAULT_WG_ADDRESS}]: " address
   address="${address:-$DEFAULT_WG_ADDRESS}"
 
-  read -rp "请输入对端允许的 IP (AllowedIPs) [默认: 0.0.0.0/0,::/0]: " allowed_ips
-  allowed_ips="${allowed_ips:-0.0.0.0/0,::/0}"
+  read -rp "请输入对端允许的 IP (AllowedIPs) [默认: 10.66.66.2/32,fd86:ea04:1115::2/128]: " allowed_ips
+  allowed_ips="${allowed_ips:-10.66.66.2/32,fd86:ea04:1115::2/128}"
 
   {
     printf 'SERVER_MODE=wireguard\n'
@@ -234,7 +234,7 @@ write_wg_server_service() {
   [ -n "${PEER_PUBLIC_KEY:-}" ] || fatal "入口配置缺少 PEER_PUBLIC_KEY。"
 
   local listen_addr="${LISTEN_ADDRESS:-::}"
-  local peer_allowed="${ALLOWED_IPS:-0.0.0.0/0,::/0}"
+  local peer_allowed="${ALLOWED_IPS:-10.66.66.2/32,fd86:ea04:1115::2/128}"
 
   # 写入 WireGuard 配置文件
   cat > "$WG_CONF" <<EOF
