@@ -6,18 +6,18 @@
 
 ## 功能
 
-- 入口模式：使用 `gost` 在当前 VPS 上启动带用户名密码认证的 SOCKS5 服务端。
+- SOCKS5 模式：使用 `gost` 在当前 VPS 上启动带用户名密码认证的 SOCKS5 服务端。
 - WireGuard 模式：在当前 VPS 上启动 WireGuard 隧道服务端，支持 ICMP 流量。
-- V4 单栈模式：使用 `hev-socks5-tunnel` 接管本机 IPv4 流量，IPv6 保持原生。
-- V4+V6 双栈模式：使用 `hev-socks5-tunnel` 同时接管本机 IPv4 和 IPv6 流量。
-- WireGuard V4/Dual 出口：通过 WireGuard 隧道接管流量，支持 ICMP，解决 tun2socks 无法代理 ICMP 的限制。
+- s5-V4 单栈模式：使用 `hev-socks5-tunnel` 接管本机 IPv4 流量，IPv6 保持原生。
+- s5-V4+V6 双栈模式：使用 `hev-socks5-tunnel` 同时接管本机 IPv4 和 IPv6 流量。
+- WG-V4/Dual 出口：通过 WireGuard 隧道接管流量，支持 ICMP，解决 tun2socks 无法代理 ICMP 的限制。
 - 全局命令：首次运行后自动安装 `/usr/local/bin/getout`，之后直接输入 `getout` 打开管理面板。
 - 一键更新：支持 `getout update` 或在管理面板选择 `9.更新 getout`。
 - V4/V6 优先模式：可在管理面板动态切换 V4 优先或 V6 优先，默认 V6 优先。
 - 运行期 DNS 策略：V4 优先模式使用 IPv4 DNS，V6 优先模式使用 IPv6 DNS。
 - 下载阶段先尝试常规下载，失败后使用 DNS64 兜底，兼容 IPv4、IPv6 和双栈 VPS。
-- SSH / 上游 SOCKS5 / DNS / 外部入站连接回包路由保护，降低出口模式接管路由后断联或影响本机代理服务的风险。
-- 入口/出口互斥：启动入口模式会停止出口模式；启动出口模式会停止入口模式。
+- SSH / 上游 SOCKS5 / DNS / 外部入站连接回包路由保护，降低出口接管路由后断联或影响本机代理服务的风险。
+- 入口/出口互斥：启动入口会停止出口；启动出口会停止入口。
 - 自启动跟随当前状态：运行中则启用开机自启，手动关闭则关闭开机自启。
 - 支持修改入口信息、修改出口信息、重启、状态查看、更新、卸载清理。
 
@@ -110,7 +110,7 @@ getout uninstall
 
 当前 VPS 作为 SOCKS5 服务端，对外提供代理入口。
 
-入口模式必须设置用户名和密码，避免误配置为公网开放代理。
+SOCKS5 模式必须设置用户名和密码，避免误配置为公网开放代理。
 
 对应服务：
 
@@ -145,21 +145,21 @@ getout-wg.service
 /etc/getout/wireguard.conf (生成)
 ```
 
-### V4 单栈模式
+### s5-V4 单栈模式
 
 通过上游 SOCKS5 接管本机 IPv4 流量，IPv6 保持原生。
 
 适合：希望当前 VPS 的 IPv4 出口走指定 SOCKS5，上游 IPv6 和本机 IPv6 保持直连。
 
-### V4+V6 双栈模式
+### s5-V4+V6 双栈
 
 通过上游 SOCKS5 同时接管本机 IPv4 和 IPv6 流量。
 
 适合：希望当前 VPS 的公网流量统一走指定 SOCKS5 出口。
 
-### WireGuard V4/Dual 出口模式
+### WG-V4/Dual 出口
 
-通过 WireGuard 隧道接管本机流量。支持 V4 单栈和 V4+V6 双栈两种子模式。
+通过 WireGuard 隧道接管本机流量。支持 s5-V4 单栈和 s5-V4+V6 双栈两种子模式。
 
 相比 tun2socks 模式的主要优势：
 - 支持 ICMP 流量（`ping` 可用）
@@ -183,7 +183,7 @@ getout-wg.service
 
 ## V4/V6 优先模式与 DNS 策略
 
-出口模式运行时，`getout` 默认使用 V6 优先模式。你可以在管理面板选择：
+出口运行时，`getout` 默认使用 V6 优先模式。你可以在管理面板选择：
 
 - `切换至 V4 优先模式`
 - `切换至 V6 优先模式`
@@ -200,21 +200,21 @@ V6 优先模式会：
 
 下载二进制时会先尝试常规下载，失败后再使用 DNS64 兜底，以兼容 IPv4、IPv6 和双栈环境。
 
-停止出口模式或卸载时会恢复原始 DNS 和 `/etc/gai.conf`。`getout` 会记录符号链接、目标文件和 checksum 信息；如果检测到原始备份缺失或运行期间文件被外部修改，会保留当前内容并给出警告，避免盲目恢复到未知内容。
+停止出口或卸载时会恢复原始 DNS 和 `/etc/gai.conf`。`getout` 会记录符号链接、目标文件和 checksum 信息；如果检测到原始备份缺失或运行期间文件被外部修改，会保留当前内容并给出警告，避免盲目恢复到未知内容。
 
 `/etc/gai.conf` 影响的是 glibc 地址选择；部分 Go、Rust、Node 或静态链接程序可能使用自己的解析和地址排序逻辑。
 
 ## 路由保护
 
-出口模式会接管本机主动出站流量。tun2socks 模式通过 TUN 设备接管，WireGuard 模式通过内核 WireGuard 接口接管。两种模式均保护关键回包不被错误路由：
+出口会接管本机主动出站流量。tun2socks 通过 TUN 设备接管，WireGuard 通过内核 WireGuard 接口接管。
 
 - 自动检测 SSH 实际监听端口并保护 SSH 回包，不依赖 SSH 是否使用 22 端口；
-- 启动或重启出口模式前会显示 SSH 回包保护检测结果，检测不足时会给出断联风险警告；
+- 启动或重启出口前会显示 SSH 回包保护检测结果，检测不足时会给出断联风险警告；
 - 保护上游 SOCKS5 和运行期 DNS 路由，避免代理回环；
 - 使用 nftables/conntrack 保护外部主动连入本机的连接回包，避免影响 sing-box、xray、hysteria、tuic、nginx 等本机入站服务；
-- tun2socks 出口模式启动前会校验 nftables 入站回包保护是否可用，校验失败会停止启动，避免保护未生效却静默运行。
+- tun2socks 出口启动前会校验 nftables 入站回包保护是否可用，校验失败会停止启动，避免保护未生效却静默运行。
 
-`ping`/ICMP 不经过 SOCKS 出口代理（tun2socks 模式），`ping` 不通不代表 TCP/UDP 出口不可用。使用 WireGuard 出口模式时 ICMP 正常工作。建议使用 `curl` 或应用自身连接测试确认出口状态。
+`ping`/ICMP 不经过 SOCKS 出口代理（tun2socks 模式），`ping` 不通不代表 TCP/UDP 出口不可用。使用 WireGuard 出口时 ICMP 正常工作。建议使用 `curl` 或应用自身连接测试确认出口状态。
 
 ## 文件位置
 
@@ -314,7 +314,7 @@ getout check
 - `/etc/getout` 和配置文件权限；
 - 入口/出口二进制和 systemd unit 是否存在；
 - 生成的路由脚本语法；
-- 当前为出口模式时执行出口 runtime preflight。
+- 当前为出口时执行出口 runtime preflight。
 
 ## 卸载
 
@@ -328,7 +328,7 @@ getout uninstall
 - 清理路由规则；
 - 恢复 DNS 和 `/etc/gai.conf`；
 - 即使生成的 `routes-down.sh` 缺失或损坏，也会尝试兜底清理 getout 相关路由规则、table 20 默认路由和 nft 表；
-- 修改出口、切换 V4/V6 优先、重启出口模式时会先保存运行文件快照，启动失败会尝试恢复旧配置和旧 systemd 文件；
+- 修改出口、切换 V4/V6 优先、重启出口时会先保存运行文件快照，启动失败会尝试恢复旧配置和旧 systemd 文件；
 - 禁用 systemd 自启动；
 - 删除配置、全局命令、二进制和 systemd unit。
 
@@ -346,7 +346,7 @@ tests/run.sh
 - 生成的 `routes-up.sh` / `routes-down.sh` 语法；
 - 出口 runtime 快照恢复，包括删除 preflight 前不存在、失败后新生成的文件；
 - 出口 preflight 失败回滚；
-- `systemctl daemon-reload` 在出口/入口模式写 service 后失败时的回滚；
+- `systemctl daemon-reload` 在出口/入口写 service 后失败时的回滚；
 - `build.sh` 生成的 `getout.sh` / `getout.sh.sha256` 没有漂移；
 - 更新 SHA256 校验成功/失败路径。
 - 第三方二进制 SHA256 校验成功/失败路径。
@@ -367,14 +367,14 @@ tests/run.sh
 
 - 仅支持 Debian。
 - WireGuard 模式需要 `wireguard-tools`，脚本会自动安装；需要自行生成或提供密钥对。
-- WireGuard 出口模式下 `ping`/ICMP 正常工作，不受 tun2socks 限制。
+- WireGuard 出口下 `ping`/ICMP 正常工作，不受 tun2socks 限制。
 - 脚本会在常规下载失败后临时修改 `/etc/resolv.conf` 使用 DNS64，DNS64 下载结束后恢复。
-- 出口模式运行时会临时修改 `/etc/resolv.conf` 和 `/etc/gai.conf`，停止或卸载时恢复。
+- 出口运行时会临时修改 `/etc/resolv.conf` 和 `/etc/gai.conf`，停止或卸载时恢复。
 - `/etc/resolv.conf` 和 `/etc/gai.conf` 的恢复依赖首次接管前保存的原始备份和 checksum；如果备份缺失或运行期间被外部修改，脚本会警告并避免盲目覆盖当前内容。
-- 出口模式启动前会创建临时 nftables 表做兼容性预检，预检失败不会继续启动。
+- 出口启动前会创建临时 nftables 表做兼容性预检，预检失败不会继续启动。
 - `/etc/getout` 会设置为私有目录，配置文件包含代理账号密码。
 - 脚本在读取配置文件前会校验配置由 root 拥有，且 group/other 不可写。
-- 入口模式必须设置用户名密码；用户名和密码不能包含空白字符或 URL 保留字符。
+- 入口必须设置用户名密码；用户名和密码不能包含空白字符或 URL 保留字符。
 - `ping`/ICMP 不经过 SOCKS 出口代理，出口连通性请优先用 TCP/UDP 应用测试。
 - 请确保 VPS 面板已开启 TUN。
 - 交互录入和状态页都会明文显示入口/出口密码，请只在可信终端使用。
@@ -382,9 +382,9 @@ tests/run.sh
 ## 已知限制与排障
 
 - 交互录入和 `status` 会明文显示入口/出口密码，这是为了在可信终端快速核对配置；不要把状态页截图或日志发到公开场所。
-- `ping`/ICMP 不经过 SOCKS 出口代理（tun2socks 模式），排障时请优先使用 `curl` 或真实应用连接测试。WireGuard 出口模式下 ICMP 正常工作。
+- `ping`/ICMP 不经过 SOCKS 出口代理（tun2socks 模式），排障时请优先使用 `curl` 或真实应用连接测试。WireGuard 出口下 ICMP 正常工作。
 - `/etc/resolv.conf` 若由 systemd-resolved、NetworkManager、VPS 面板等外部组件并发管理，getout 会尽量保留外部修改并报警；遇到 DNS 异常时先检查 `/etc/getout/resolv.conf.*` 和当前 `/etc/resolv.conf`。
-- 出口模式依赖 TUN、nftables、conntrack/fib 规则能力；如果 `getout doctor` 或启动 preflight 失败，请先按错误提示处理内核/系统能力问题。
+- 出口依赖 TUN、nftables、conntrack/fib 规则能力；如果 `getout doctor` 或启动 preflight 失败，请先按错误提示处理内核/系统能力问题。
 - 更新后如果服务正在运行，建议执行 `getout restart`，让 systemd unit 和路由脚本刷新到最新版本。
 - 当前 SHA256 是完整性校验，不是强签名；如果需要更强供应链保护，请使用可信网络、固定 SHA256，或后续接入 GPG/minisign 签名发布。
 - `gost` 和 `hev-socks5-tunnel` 第三方二进制当前做固定 SHA256 完整性校验，但仍不是 GPG/minisign 强签名；高安全场景请自行固定可信来源或接入强签名验证。
