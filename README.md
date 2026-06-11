@@ -7,10 +7,10 @@
 ## 功能
 
 - 入口模式：使用 `gost` 在当前 VPS 上启动带用户名密码认证的 SOCKS5 服务端。
-- WireGuard 入口模式：在当前 VPS 上启动 WireGuard 隧道服务端，支持 ICMP 流量。
+- WireGuard 入口：在当前 VPS 上启动 WireGuard 隧道服务端，支持 ICMP 流量。
 - V4 单栈模式：使用 `hev-socks5-tunnel` 接管本机 IPv4 流量，IPv6 保持原生。
 - V4+V6 双栈模式：使用 `hev-socks5-tunnel` 同时接管本机 IPv4 和 IPv6 流量。
-- WireGuard V4/Dual 出口模式：通过 WireGuard 隧道接管流量，支持 ICMP，解决 tun2socks 无法代理 ICMP 的限制。
+- WireGuard V4/Dual 出口：通过 WireGuard 隧道接管流量，支持 ICMP，解决 tun2socks 无法代理 ICMP 的限制。
 - 全局命令：首次运行后自动安装 `/usr/local/bin/getout`，之后直接输入 `getout` 打开管理面板。
 - 一键更新：支持 `getout update` 或在管理面板选择 `9.更新 getout`。
 - V4/V6 优先模式：可在管理面板动态切换 V4 优先或 V6 优先，默认 V6 优先。
@@ -53,12 +53,12 @@ getout
 也可以直接运行指定命令：
 
 ```bash
-getout server     # SOCKS5 入口模式
-getout wg-server  # WireGuard 入口模式
-getout v4         # V4 单栈出口 (tun2socks)
-getout dual       # V4+V6 双栈出口 (tun2socks)
-getout wg-v4      # WireGuard V4 单栈出口
-getout wg-dual    # WireGuard V4+V6 双栈出口
+getout server     # SOCKS5 入口
+getout wg-server  # WireGuard 入口
+getout v4         # s5-V4 单栈出口 (tun2socks)
+getout dual       # s5-V4+V6 双栈出口 (tun2socks)
+getout wg-v4      # WG-V4 单栈出口
+getout wg-dual    # WG-V4+V6 双栈出口
 getout stop
 getout restart
 getout status
@@ -73,13 +73,13 @@ getout uninstall
 ====================================================
                  getout 管理面板
 ====================================================
-1.启动 SOCKS5 入口模式
-2.启动 WireGuard 入口模式
+1.启动 SOCKS5 入口
+2.启动 WireGuard 入口
 3.修改入口信息
-4.启动 V4 单栈模式 (tun2socks)
-5.启动 V4+V6 双栈模式 (tun2socks)
-6.启动 WireGuard V4 单栈模式
-7.启动 WireGuard V4+V6 双栈模式
+4.启动 s5-V4 单栈模式 (tun2socks)
+5.启动 s5-V4+V6 双栈模式 (tun2socks)
+6.启动 WG-V4 单栈模式
+7.启动 WG-V4+V6 双栈模式
 8.修改出口信息
 9.切换至 V4 优先模式
 10.查看状态
@@ -93,8 +93,8 @@ getout uninstall
 
 菜单会根据当前运行状态动态显示明确动作，例如：
 
-- `关闭 SOCKS5 入口模式`
-- `关闭 WireGuard 入口模式`
+- `关闭 SOCKS5 入口`
+- `关闭 WireGuard 入口`
 - `关闭 V4 单栈模式`
 - `关闭 V4+V6 双栈模式`
 - `关闭 WireGuard V4 单栈模式`
@@ -104,7 +104,7 @@ getout uninstall
 
 ## 模式说明
 
-### 入口模式（SOCKS5）
+### 入口（SOCKS5）
 
 当前 VPS 作为 SOCKS5 服务端，对外提供代理入口。
 
@@ -122,7 +122,7 @@ getout-gost.service
 /etc/getout/server.conf
 ```
 
-### 入口模式（WireGuard）
+### 入口（WireGuard）
 
 当前 VPS 作为 WireGuard 服务端，通过内核级 WireGuard 隧道提供代理入口。
 

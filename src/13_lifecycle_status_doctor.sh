@@ -24,7 +24,7 @@ restart_getout() {
     restart_gost_with_rollback "$snapshot" restart
     systemctl enable getout-gost.service >/dev/null 2>&1 || true
     systemctl disable getout-tun.service getout-wg.service >/dev/null 2>&1 || true
-    success "入口模式已重启。"
+    success "入口已重启。"
     status
   elif wg_server_active && [ "$mode_file_content" = "wg-server" ]; then
     local snapshot
@@ -96,7 +96,7 @@ restart_getout() {
     restart_wg_with_rollback "$snapshot" restart
     systemctl enable getout-wg.service >/dev/null 2>&1 || true
     systemctl disable getout-gost.service getout-tun.service >/dev/null 2>&1 || true
-    success "WireGuard 出口模式已重启。"
+    success "WG 出口已重启。"
     status
   else
     warn "当前 getout 未运行，请选择 1/3/4/5/6 启动。"
@@ -149,7 +149,7 @@ status() {
       ;;
     v4)
       echo "入口: $gost_state"
-      echo "V4 单栈模式: $tun_state"
+      echo "s5-V4 单栈模式: $tun_state"
       echo "当前模式: v4"
       ;;
     dual)
@@ -159,12 +159,12 @@ status() {
       ;;
     wg-v4)
       echo "入口: $gost_state"
-      echo "WireGuard V4 单栈模式: $wg_state"
+      echo "WG-V4 单栈模式: $wg_state"
       echo "当前模式: wg-v4"
       ;;
     wg-dual)
       echo "入口: $gost_state"
-      echo "WireGuard V4+V6 双栈模式: $wg_state"
+      echo "WG-V4+V6 双栈模式: $wg_state"
       echo "当前模式: wg-dual"
       ;;
     *)
@@ -280,8 +280,8 @@ doctor_check() {
     check_warn "出口配置不存在。"
   fi
 
-  [ -x "$GOST_BIN" ] && check_ok "入口二进制存在：$GOST_BIN" || check_warn "入口二进制不存在，启动 SOCKS5 入口模式时会下载。"
-  [ -x "$TUN_BIN" ] && check_ok "出口二进制存在：$TUN_BIN" || check_warn "出口二进制不存在，启动 tun2socks 出口模式时会下载。"
+  [ -x "$GOST_BIN" ] && check_ok "入口二进制存在：$GOST_BIN" || check_warn "入口二进制不存在，启动 SOCKS5 入口时会下载。"
+  [ -x "$TUN_BIN" ] && check_ok "出口二进制存在：$TUN_BIN" || check_warn "出口二进制不存在，启动 tun2socks 出口时会下载。"
   command -v wg >/dev/null 2>&1 && check_ok "wg 命令可用" || check_warn "未找到 wg 命令，WireGuard 模式需要 wireguard-tools。"
   command -v wg-quick >/dev/null 2>&1 && check_ok "wg-quick 命令可用" || check_warn "未找到 wg-quick 命令，WireGuard 模式需要 wireguard-tools。"
   [ -f "$GOST_SERVICE" ] && check_ok "入口 SOCKS5 systemd unit 存在" || check_warn "入口 SOCKS5 systemd unit 不存在。"
@@ -291,7 +291,7 @@ doctor_check() {
   if [ -f "$ROUTES_UP" ] && [ -f "$ROUTES_DOWN" ]; then
     bash -n "$ROUTES_UP" && bash -n "$ROUTES_DOWN" && check_ok "路由脚本语法正常" || check_fail "路由脚本语法异常。"
   else
-    check_warn "路由脚本不存在，启动出口模式时会生成。"
+    check_warn "路由脚本不存在，启动出口时会生成。"
   fi
 
   if [ "$mode" = "v4" ] || [ "$mode" = "dual" ]; then

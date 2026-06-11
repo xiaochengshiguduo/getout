@@ -95,7 +95,7 @@ restore_server_or_warn() {
   trap - EXIT
   restore_server_files "$snapshot"
   remove_runtime_snapshot "$snapshot"
-  warn "入口模式启动失败，已尝试恢复旧入口配置和旧 systemd 文件。"
+  warn "入口启动失败，已尝试恢复旧入口配置和旧 systemd 文件。"
 }
 
 preflight_tun_runtime_with_rollback() {

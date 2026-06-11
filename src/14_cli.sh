@@ -8,13 +8,13 @@ menu_action_label() {
     wg-server)
       if wg_server_active; then echo "关闭 WireGuard 入口"; else echo "启动 WireGuard 入口"; fi ;;
     v4)
-      if tun_active && [ "$mode" = "v4" ]; then echo "关闭 V4 单栈模式"; else echo "启动 V4 单栈模式"; fi ;;
+      if tun_active && [ "$mode" = "v4" ]; then echo "关闭 s5-V4 单栈模式"; else echo "启动 s5-V4 单栈模式"; fi ;;
     dual)
-      if tun_active && [ "$mode" = "dual" ]; then echo "关闭 V4+V6 双栈模式"; else echo "启动 V4+V6 双栈模式"; fi ;;
+      if tun_active && [ "$mode" = "dual" ]; then echo "关闭 s5-V4+V6 双栈模式"; else echo "启动 s5-V4+V6 双栈模式"; fi ;;
     wg-v4)
-      if wg_client_active && [ "$mode" = "wg-v4" ]; then echo "关闭 WG-V4 单栈"; else echo "启动 WG-V4 单栈"; fi ;;
+      if wg_client_active && [ "$mode" = "wg-v4" ]; then echo "关闭 WG-V4 单栈模式"; else echo "启动 WG-V4 单栈模式"; fi ;;
     wg-dual)
-      if wg_client_active && [ "$mode" = "wg-dual" ]; then echo "关闭 WG-V4+V6 双栈"; else echo "启动 WG-V4+V6 双栈"; fi ;;
+      if wg_client_active && [ "$mode" = "wg-dual" ]; then echo "关闭 WG-V4+V6 双栈模式"; else echo "启动 WG-V4+V6 双栈模式"; fi ;;
   esac
 }
 
@@ -23,11 +23,11 @@ menu() {
   echo -e "${BLUE}====================================================${NC}"
   echo -e "${BLUE}                 getout 管理面板${NC}"
   echo -e "${BLUE}====================================================${NC}"
-  echo "--- 入口模式 ---"
+  echo "--- 入口 ---"
   echo "  1.$(menu_action_label server)"
   echo "  2.$(menu_action_label wg-server)"
   echo "  3.修改入口信息"
-  echo "--- 出口模式 ---"
+  echo "--- 出口 ---"
   echo "  4.$(menu_action_label v4)"
   echo "  5.$(menu_action_label dual)"
   echo "  6.$(menu_action_label wg-v4)"
@@ -46,7 +46,7 @@ menu() {
     1) if server_active; then stop_server; else start_server; fi ;;
     2) if wg_server_active; then stop_wg_server; else start_wg_server; fi ;;
     3)
-      echo -e "${BLUE}修改入口模式:${NC}"
+      echo -e "${BLUE}修改入口:${NC}"
       echo "  a. SOCKS5 入口"
       echo "  b. WireGuard 入口"
       read -rp "请选择 [a/b]: " entry_choice
@@ -75,12 +75,12 @@ usage() {
   cat <<EOF
 用法：getout [server|wg-server|v4|dual|wg-v4|wg-dual|stop|restart|status|doctor|check|update|uninstall]
 
-server     启动 SOCKS5 入口模式
-wg-server  启动 WireGuard 入口模式
-v4         启动 V4 单栈出口模式 (tun2socks)
-dual       启动 V4+V6 双栈出口模式 (tun2socks)
-wg-v4      启动 WireGuard V4 单栈出口模式
-wg-dual    启动 WireGuard V4+V6 双栈出口模式
+server     启动 SOCKS5 入口
+wg-server  启动 WireGuard 入口
+v4         启动 s5-V4 单栈出口模式 (tun2socks)
+dual       启动 s5-V4+V6 双栈出口模式 (tun2socks)
+wg-v4      启动 WG-V4 单栈出口模式
+wg-dual    启动 WG-V4+V6 双栈出口模式
 stop       关闭当前运行中的 getout 模式
 restart    重启当前运行中的 getout 模式
 status     查看状态

@@ -65,7 +65,7 @@ prompt_server_info() {
 
   read -rp "是否设置用户名密码? [Y/n]: " yn
   yn="${yn:-Y}"
-  [[ "$yn" =~ ^[Yy]$ ]] || fatal "入口模式必须设置用户名密码，避免暴露为开放代理。"
+  [[ "$yn" =~ ^[Yy]$ ]] || fatal "入口必须设置用户名密码，避免暴露为开放代理。"
   user=""; pass=""
   read -rp "用户名: " user
   [ -n "$user" ] || fatal "用户名不能为空。"
@@ -89,7 +89,7 @@ write_gost_service() {
   . "$SERVER_CONF"
   local auth listen
   auth=""
-  [ -n "${USERNAME:-}" ] && [ -n "${PASSWORD:-}" ] || fatal "入口模式必须配置用户名密码，请先修改入口信息。"
+  [ -n "${USERNAME:-}" ] && [ -n "${PASSWORD:-}" ] || fatal "入口必须配置用户名密码，请先修改入口信息。"
   reject_url_unsafe "用户名" "$USERNAME"
   reject_url_unsafe "密码" "${PASSWORD:-}"
   auth="${USERNAME}:${PASSWORD}@"
@@ -133,14 +133,14 @@ start_server() {
     . "$SERVER_CONF"
     ufw allow "${PORT}/tcp" >/dev/null || true
   fi
-  success "入口模式已启动。"
+  success "入口已启动。"
   status
 }
 
 stop_server() {
   require_root
   stop_server_keep_config
-  success "入口模式已关闭。"
+  success "入口已关闭。"
 }
 
 configure_server() {
@@ -159,9 +159,9 @@ configure_server() {
     status
   else
     clear_runtime_rollback "$snapshot"
-    success "入口信息已保存，启动入口模式后生效。"
+    success "入口信息已保存，启动入口后生效。"
     if tun_active; then
-      warn "当前出口模式正在运行，入口信息不会影响当前出口模式。"
+      warn "当前出口正在运行，入口信息不会影响当前出口。"
     fi
   fi
 }
@@ -328,9 +328,9 @@ configure_wg_server() {
     status
   else
     clear_runtime_rollback "$snapshot"
-    success "入口 WireGuard 信息已保存，启动入口模式后生效。"
+    success "入口 WireGuard 信息已保存，启动入口后生效。"
     if any_client_active; then
-      warn "当前出口模式正在运行，入口信息不会影响当前出口模式。"
+      warn "当前出口正在运行，入口信息不会影响当前出口。"
     fi
   fi
 }

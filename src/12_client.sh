@@ -354,9 +354,9 @@ stop_client() {
   case "$mode" in
     v4) success "V4 单栈模式已关闭。" ;;
     dual) success "V4+V6 双栈模式已关闭。" ;;
-    wg-v4) success "WireGuard V4 单栈模式已关闭。" ;;
+    wg-v4) success "WG-V4 单栈模式已关闭。" ;;
     wg-dual) success "WireGuard V4+V6 双栈模式已关闭。" ;;
-    *) success "出口模式已关闭。" ;;
+    *) success "出口已关闭。" ;;
   esac
 }
 
@@ -409,7 +409,7 @@ configure_client() {
     clear_runtime_rollback "$snapshot"
     success "出口信息已保存，启动 V4/双栈模式后生效。"
     if server_active; then
-      warn "当前入口模式正在运行，出口信息不会影响当前入口模式。"
+      warn "当前入口正在运行，出口信息不会影响当前入口。"
     fi
   fi
 }
@@ -450,7 +450,7 @@ configure_wg_client() {
     clear_runtime_rollback "$snapshot"
     success "WireGuard 出口信息已保存，启动 WireGuard 模式后生效。"
     if server_active; then
-      warn "当前入口模式正在运行，出口信息不会影响当前入口模式。"
+      warn "当前入口正在运行，出口信息不会影响当前入口。"
     fi
   fi
 }

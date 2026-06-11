@@ -721,7 +721,7 @@ restore_server_or_warn() {
   trap - EXIT
   restore_server_files "$snapshot"
   remove_runtime_snapshot "$snapshot"
-  warn "入口模式启动失败，已尝试恢复旧入口配置和旧 systemd 文件。"
+  warn "入口启动失败，已尝试恢复旧入口配置和旧 systemd 文件。"
 }
 
 preflight_tun_runtime_with_rollback() {
@@ -1213,7 +1213,7 @@ prompt_server_info() {
 
   read -rp "是否设置用户名密码? [Y/n]: " yn
   yn="${yn:-Y}"
-  [[ "$yn" =~ ^[Yy]$ ]] || fatal "入口模式必须设置用户名密码，避免暴露为开放代理。"
+  [[ "$yn" =~ ^[Yy]$ ]] || fatal "入口必须设置用户名密码，避免暴露为开放代理。"
   user=""; pass=""
   read -rp "用户名: " user
   [ -n "$user" ] || fatal "用户名不能为空。"
@@ -1237,7 +1237,7 @@ write_gost_service() {
   . "$SERVER_CONF"
   local auth listen
   auth=""
-  [ -n "${USERNAME:-}" ] && [ -n "${PASSWORD:-}" ] || fatal "入口模式必须配置用户名密码，请先修改入口信息。"
+  [ -n "${USERNAME:-}" ] && [ -n "${PASSWORD:-}" ] || fatal "入口必须配置用户名密码，请先修改入口信息。"
   reject_url_unsafe "用户名" "$USERNAME"
   reject_url_unsafe "密码" "${PASSWORD:-}"
   auth="${USERNAME}:${PASSWORD}@"
@@ -1281,14 +1281,14 @@ start_server() {
     . "$SERVER_CONF"
     ufw allow "${PORT}/tcp" >/dev/null || true
   fi
-  success "入口模式已启动。"
+  success "入口已启动。"
   status
 }
 
 stop_server() {
   require_root
   stop_server_keep_config
-  success "入口模式已关闭。"
+  success "入口已关闭。"
 }
 
 configure_server() {
@@ -1307,9 +1307,9 @@ configure_server() {
     status
   else
     clear_runtime_rollback "$snapshot"
-    success "入口信息已保存，启动入口模式后生效。"
+    success "入口信息已保存，启动入口后生效。"
     if tun_active; then
-      warn "当前出口模式正在运行，入口信息不会影响当前出口模式。"
+      warn "当前出口正在运行，入口信息不会影响当前出口。"
     fi
   fi
 }
@@ -1423,6 +1423,10 @@ start_wg_server() {
     fi
     prompt_wg_server_info
   fi
+  [ -f "$SERVER_CONF" ] && grep -q '^SERVER_MODE=wireguard' "$SERVER_CONF" || {
+    restore_server_or_warn "$snapshot"
+    fatal "WireGuard 入口配置无效。"
+  }
   write_wg_server_service
   echo "wg-server" > "$MODE_FILE"
   chmod_private_file "$MODE_FILE"
@@ -1472,9 +1476,9 @@ configure_wg_server() {
     status
   else
     clear_runtime_rollback "$snapshot"
-    success "入口 WireGuard 信息已保存，启动入口模式后生效。"
+    success "入口 WireGuard 信息已保存，启动入口后生效。"
     if any_client_active; then
-      warn "当前出口模式正在运行，入口信息不会影响当前出口模式。"
+      warn "当前出口正在运行，入口信息不会影响当前出口。"
     fi
   fi
 }
@@ -1835,9 +1839,9 @@ stop_client() {
   case "$mode" in
     v4) success "V4 单栈模式已关闭。" ;;
     dual) success "V4+V6 双栈模式已关闭。" ;;
-    wg-v4) success "WireGuard V4 单栈模式已关闭。" ;;
+    wg-v4) success "WG-V4 单栈模式已关闭。" ;;
     wg-dual) success "WireGuard V4+V6 双栈模式已关闭。" ;;
-    *) success "出口模式已关闭。" ;;
+    *) success "出口已关闭。" ;;
   esac
 }
 
@@ -1890,7 +1894,7 @@ configure_client() {
     clear_runtime_rollback "$snapshot"
     success "出口信息已保存，启动 V4/双栈模式后生效。"
     if server_active; then
-      warn "当前入口模式正在运行，出口信息不会影响当前入口模式。"
+      warn "当前入口正在运行，出口信息不会影响当前入口。"
     fi
   fi
 }
@@ -1931,7 +1935,7 @@ configure_wg_client() {
     clear_runtime_rollback "$snapshot"
     success "WireGuard 出口信息已保存，启动 WireGuard 模式后生效。"
     if server_active; then
-      warn "当前入口模式正在运行，出口信息不会影响当前入口模式。"
+      warn "当前入口正在运行，出口信息不会影响当前入口。"
     fi
   fi
 }
@@ -2045,7 +2049,7 @@ restart_getout() {
     restart_gost_with_rollback "$snapshot" restart
     systemctl enable getout-gost.service >/dev/null 2>&1 || true
     systemctl disable getout-tun.service getout-wg.service >/dev/null 2>&1 || true
-    success "入口模式已重启。"
+    success "入口已重启。"
     status
   elif wg_server_active && [ "$mode_file_content" = "wg-server" ]; then
     local snapshot
@@ -2117,7 +2121,7 @@ restart_getout() {
     restart_wg_with_rollback "$snapshot" restart
     systemctl enable getout-wg.service >/dev/null 2>&1 || true
     systemctl disable getout-gost.service getout-tun.service >/dev/null 2>&1 || true
-    success "WireGuard 出口模式已重启。"
+    success "WG 出口已重启。"
     status
   else
     warn "当前 getout 未运行，请选择 1/3/4/5/6 启动。"
@@ -2170,7 +2174,7 @@ status() {
       ;;
     v4)
       echo "入口: $gost_state"
-      echo "V4 单栈模式: $tun_state"
+      echo "s5-V4 单栈模式: $tun_state"
       echo "当前模式: v4"
       ;;
     dual)
@@ -2180,12 +2184,12 @@ status() {
       ;;
     wg-v4)
       echo "入口: $gost_state"
-      echo "WireGuard V4 单栈模式: $wg_state"
+      echo "WG-V4 单栈模式: $wg_state"
       echo "当前模式: wg-v4"
       ;;
     wg-dual)
       echo "入口: $gost_state"
-      echo "WireGuard V4+V6 双栈模式: $wg_state"
+      echo "WG-V4+V6 双栈模式: $wg_state"
       echo "当前模式: wg-dual"
       ;;
     *)
@@ -2301,8 +2305,8 @@ doctor_check() {
     check_warn "出口配置不存在。"
   fi
 
-  [ -x "$GOST_BIN" ] && check_ok "入口二进制存在：$GOST_BIN" || check_warn "入口二进制不存在，启动 SOCKS5 入口模式时会下载。"
-  [ -x "$TUN_BIN" ] && check_ok "出口二进制存在：$TUN_BIN" || check_warn "出口二进制不存在，启动 tun2socks 出口模式时会下载。"
+  [ -x "$GOST_BIN" ] && check_ok "入口二进制存在：$GOST_BIN" || check_warn "入口二进制不存在，启动 SOCKS5 入口时会下载。"
+  [ -x "$TUN_BIN" ] && check_ok "出口二进制存在：$TUN_BIN" || check_warn "出口二进制不存在，启动 tun2socks 出口时会下载。"
   command -v wg >/dev/null 2>&1 && check_ok "wg 命令可用" || check_warn "未找到 wg 命令，WireGuard 模式需要 wireguard-tools。"
   command -v wg-quick >/dev/null 2>&1 && check_ok "wg-quick 命令可用" || check_warn "未找到 wg-quick 命令，WireGuard 模式需要 wireguard-tools。"
   [ -f "$GOST_SERVICE" ] && check_ok "入口 SOCKS5 systemd unit 存在" || check_warn "入口 SOCKS5 systemd unit 不存在。"
@@ -2312,7 +2316,7 @@ doctor_check() {
   if [ -f "$ROUTES_UP" ] && [ -f "$ROUTES_DOWN" ]; then
     bash -n "$ROUTES_UP" && bash -n "$ROUTES_DOWN" && check_ok "路由脚本语法正常" || check_fail "路由脚本语法异常。"
   else
-    check_warn "路由脚本不存在，启动出口模式时会生成。"
+    check_warn "路由脚本不存在，启动出口时会生成。"
   fi
 
   if [ "$mode" = "v4" ] || [ "$mode" = "dual" ]; then
@@ -2340,13 +2344,13 @@ menu_action_label() {
     wg-server)
       if wg_server_active; then echo "关闭 WireGuard 入口"; else echo "启动 WireGuard 入口"; fi ;;
     v4)
-      if tun_active && [ "$mode" = "v4" ]; then echo "关闭 V4 单栈模式"; else echo "启动 V4 单栈模式"; fi ;;
+      if tun_active && [ "$mode" = "v4" ]; then echo "关闭 s5-V4 单栈模式"; else echo "启动 s5-V4 单栈模式"; fi ;;
     dual)
-      if tun_active && [ "$mode" = "dual" ]; then echo "关闭 V4+V6 双栈模式"; else echo "启动 V4+V6 双栈模式"; fi ;;
+      if tun_active && [ "$mode" = "dual" ]; then echo "关闭 s5-V4+V6 双栈模式"; else echo "启动 s5-V4+V6 双栈模式"; fi ;;
     wg-v4)
-      if wg_client_active && [ "$mode" = "wg-v4" ]; then echo "关闭 WG-V4 单栈"; else echo "启动 WG-V4 单栈"; fi ;;
+      if wg_client_active && [ "$mode" = "wg-v4" ]; then echo "关闭 WG-V4 单栈模式"; else echo "启动 WG-V4 单栈模式"; fi ;;
     wg-dual)
-      if wg_client_active && [ "$mode" = "wg-dual" ]; then echo "关闭 WG-V4+V6 双栈"; else echo "启动 WG-V4+V6 双栈"; fi ;;
+      if wg_client_active && [ "$mode" = "wg-dual" ]; then echo "关闭 WG-V4+V6 双栈模式"; else echo "启动 WG-V4+V6 双栈模式"; fi ;;
   esac
 }
 
@@ -2355,11 +2359,11 @@ menu() {
   echo -e "${BLUE}====================================================${NC}"
   echo -e "${BLUE}                 getout 管理面板${NC}"
   echo -e "${BLUE}====================================================${NC}"
-  echo "--- 入口模式 ---"
+  echo "--- 入口 ---"
   echo "  1.$(menu_action_label server)"
   echo "  2.$(menu_action_label wg-server)"
   echo "  3.修改入口信息"
-  echo "--- 出口模式 ---"
+  echo "--- 出口 ---"
   echo "  4.$(menu_action_label v4)"
   echo "  5.$(menu_action_label dual)"
   echo "  6.$(menu_action_label wg-v4)"
@@ -2378,7 +2382,7 @@ menu() {
     1) if server_active; then stop_server; else start_server; fi ;;
     2) if wg_server_active; then stop_wg_server; else start_wg_server; fi ;;
     3)
-      echo -e "${BLUE}修改入口模式:${NC}"
+      echo -e "${BLUE}修改入口:${NC}"
       echo "  a. SOCKS5 入口"
       echo "  b. WireGuard 入口"
       read -rp "请选择 [a/b]: " entry_choice
@@ -2407,12 +2411,12 @@ usage() {
   cat <<EOF
 用法：getout [server|wg-server|v4|dual|wg-v4|wg-dual|stop|restart|status|doctor|check|update|uninstall]
 
-server     启动 SOCKS5 入口模式
-wg-server  启动 WireGuard 入口模式
-v4         启动 V4 单栈出口模式 (tun2socks)
-dual       启动 V4+V6 双栈出口模式 (tun2socks)
-wg-v4      启动 WireGuard V4 单栈出口模式
-wg-dual    启动 WireGuard V4+V6 双栈出口模式
+server     启动 SOCKS5 入口
+wg-server  启动 WireGuard 入口
+v4         启动 s5-V4 单栈出口模式 (tun2socks)
+dual       启动 s5-V4+V6 双栈出口模式 (tun2socks)
+wg-v4      启动 WG-V4 单栈出口模式
+wg-dual    启动 WG-V4+V6 双栈出口模式
 stop       关闭当前运行中的 getout 模式
 restart    重启当前运行中的 getout 模式
 status     查看状态
