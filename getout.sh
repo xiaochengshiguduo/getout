@@ -1367,13 +1367,31 @@ prompt_wg_server_info() {
 
   echo ""
   echo -e "${GREEN}========================================${NC}"
-  echo -e "${GREEN} 入口信息:${NC}"
+  echo -e "${GREEN} 入口信息（请复制到出口机器使用）:${NC}"
   echo -e "${GREEN}========================================${NC}"
   echo -e "  公钥: ${BLUE}${server_pub}${NC}"
   echo -e "  私钥: ${BLUE}${peer_private}${NC}"
-  echo -e "  地址: ${BLUE}$(main_ipv6 || main_ipv4 || echo '<本机IP>')${NC}"
   echo -e "  端口: ${BLUE}${listen_port}${NC}"
-  echo -e "  隧道: ${BLUE}${address%.*}.2/32${NC}"
+  
+  # 显示服务端公网地址（Endpoint）
+  local ipv4 ipv6
+  ipv4="$(main_ipv4 || true)"
+  ipv6="$(main_ipv6 || true)"
+  if [ -n "$ipv4" ] && [ -n "$ipv6" ]; then
+    echo -e "  地址 (Endpoint):"
+    echo -e "    IPv4: ${BLUE}${ipv4}${NC}"
+    echo -e "    IPv6: ${BLUE}${ipv6}${NC}"
+  elif [ -n "$ipv4" ]; then
+    echo -e "  地址 (Endpoint): ${BLUE}${ipv4}${NC}"
+  elif [ -n "$ipv6" ]; then
+    echo -e "  地址 (Endpoint): ${BLUE}${ipv6}${NC}"
+  else
+    echo -e "  地址 (Endpoint): ${YELLOW}<无法检测本机IP>${NC}"
+  fi
+  
+  # 显示客户端隧道地址
+  local client_addr="${address%.*}.2/32"
+  echo -e "  隧道地址: ${BLUE}${client_addr}${NC}"
   echo -e "${GREEN}========================================${NC}"
 }
 
