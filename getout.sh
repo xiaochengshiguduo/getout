@@ -2272,7 +2272,6 @@ status() {
     . "$SERVER_CONF"
     if [ "${SERVER_MODE:-}" = "wireguard" ]; then
       echo "类型: WireGuard"
-      echo "端口: ${LISTEN_PORT:-}"
       local addr="${ADDRESS:-}"
       local v4_part="${addr%%,*}"
       v4_part="${v4_part// /}"
@@ -2284,6 +2283,7 @@ status() {
       else
         echo "地址: ${addr}"
       fi
+      echo "端口: ${LISTEN_PORT:-}"
       echo "公钥: ${PEER_PUBLIC_KEY:-}"
     else
       echo "类型: SOCKS5 (gost)"
