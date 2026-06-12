@@ -103,7 +103,7 @@ add_ssh_port_rules() {
   done
 }
 add_inbound_protect() {
-  command -v nft >/dev/null 2>&1 || { echo "[错误] 未找到 nft，无法启用外部入站连接回包保护。" >&2; return 1; }
+  command -v nft >/dev/null 2>&1 || { echo "[信息] 未找到 nft，跳过外部入站连接回包保护（可选功能）。" >&2; return 0; }
   nft delete table inet "$NFT_TABLE" 2>/dev/null || true
   nft add table inet "$NFT_TABLE"
   nft add chain inet "$NFT_TABLE" prerouting '{ type filter hook prerouting priority -150; policy accept; }'

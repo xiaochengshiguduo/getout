@@ -70,14 +70,17 @@ preflight_tun_runtime() {
   [ -x "$ROUTES_DOWN" ] || { err "routes-down.sh 不可执行：$ROUTES_DOWN"; return 1; }
   bash -n "$ROUTES_UP" || { err "routes-up.sh 语法校验失败。"; return 1; }
   bash -n "$ROUTES_DOWN" || { err "routes-down.sh 语法校验失败。"; return 1; }
-  command -v nft >/dev/null 2>&1 || { err "未找到 nft，无法启用外部入站连接回包保护。"; return 1; }
-  nft delete table inet getout_preflight 2>/dev/null || true
-  nft add table inet getout_preflight >/dev/null 2>&1 || { err "nftables 预检失败：无法创建 inet table。"; return 1; }
-  nft add chain inet getout_preflight prerouting '{ type filter hook prerouting priority -150; policy accept; }' >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败：当前内核不支持所需 prerouting 规则。"; return 1; }
-  nft add chain inet getout_preflight output '{ type route hook output priority -150; policy accept; }' >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败：当前内核不支持所需 output route hook。"; return 1; }
-  nft add rule inet getout_preflight prerouting iifname != "$TUN_NAME" ct state new fib daddr type local ct mark set "$BYPASS_MARK_ID" >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败：当前内核不支持 conntrack/fib 标记规则。"; return 1; }
-  nft add rule inet getout_preflight output ct mark "$BYPASS_MARK_ID" meta mark set "$BYPASS_MARK_ID" >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败：当前内核不支持 ct mark 输出规则。"; return 1; }
-  nft delete table inet getout_preflight 2>/dev/null || true
+  if command -v nft >/dev/null 2>&1; then
+    nft delete table inet getout_preflight 2>/dev/null || true
+    nft add table inet getout_preflight >/dev/null 2>&1 || { err "nftables 预检失败：无法创建 inet table。"; return 1; }
+    nft add chain inet getout_preflight prerouting '{ type filter hook prerouting priority -150; policy accept; }' >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败：当前内核不支持所需 prerouting 规则。"; return 1; }
+    nft add chain inet getout_preflight output '{ type route hook output priority -150; policy accept; }' >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败：当前内核不支持所需 output route hook。"; return 1; }
+    nft add rule inet getout_preflight prerouting iifname != "$TUN_NAME" ct state new fib daddr type local ct mark set "$BYPASS_MARK_ID" >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败：当前内核不支持 conntrack/fib 标记规则。"; return 1; }
+    nft add rule inet getout_preflight output ct mark "$BYPASS_MARK_ID" meta mark set "$BYPASS_MARK_ID" >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败：当前内核不支持 ct mark 输出规则。"; return 1; }
+    nft delete table inet getout_preflight 2>/dev/null || true
+  else
+    info "未找到 nft，跳过 nftables 预检（可选功能）。"
+  fi
 }
 
 restore_runtime_or_warn() {
@@ -147,14 +150,17 @@ preflight_wg_runtime() {
   [ -x "$ROUTES_DOWN" ] || { err "routes-down.sh 不可执行：$ROUTES_DOWN"; return 1; }
   bash -n "$ROUTES_UP" || { err "routes-up.sh 语法校验失败。"; return 1; }
   bash -n "$ROUTES_DOWN" || { err "routes-down.sh 语法校验失败。"; return 1; }
-  command -v nft >/dev/null 2>&1 || { err "未找到 nft，无法启用外部入站连接回包保护。"; return 1; }
-  nft delete table inet getout_preflight 2>/dev/null || true
-  nft add table inet getout_preflight >/dev/null 2>&1 || { err "nftables 预检失败：无法创建 inet table。"; return 1; }
-  nft add chain inet getout_preflight prerouting '{ type filter hook prerouting priority -150; policy accept; }' >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败。"; return 1; }
-  nft add chain inet getout_preflight output '{ type route hook output priority -150; policy accept; }' >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败。"; return 1; }
-  nft add rule inet getout_preflight prerouting iifname != "$TUN_NAME" ct state new fib daddr type local ct mark set "$BYPASS_MARK_ID" >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败。"; return 1; }
-  nft add rule inet getout_preflight output ct mark "$BYPASS_MARK_ID" meta mark set "$BYPASS_MARK_ID" >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败。"; return 1; }
-  nft delete table inet getout_preflight 2>/dev/null || true
+  if command -v nft >/dev/null 2>&1; then
+    nft delete table inet getout_preflight 2>/dev/null || true
+    nft add table inet getout_preflight >/dev/null 2>&1 || { err "nftables 预检失败：无法创建 inet table。"; return 1; }
+    nft add chain inet getout_preflight prerouting '{ type filter hook prerouting priority -150; policy accept; }' >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败。"; return 1; }
+    nft add chain inet getout_preflight output '{ type route hook output priority -150; policy accept; }' >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败。"; return 1; }
+    nft add rule inet getout_preflight prerouting iifname != "$TUN_NAME" ct state new fib daddr type local ct mark set "$BYPASS_MARK_ID" >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败。"; return 1; }
+    nft add rule inet getout_preflight output ct mark "$BYPASS_MARK_ID" meta mark set "$BYPASS_MARK_ID" >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败。"; return 1; }
+    nft delete table inet getout_preflight 2>/dev/null || true
+  else
+    info "未找到 nft，跳过 nftables 预检（可选功能）。"
+  fi
 }
 
 preflight_wg_runtime_with_rollback() {

@@ -14,7 +14,7 @@ require_debian() {
 install_deps() {
   local missing=() cmd pkg
   declare -A map=(
-    [curl]=curl [gzip]=gzip [gunzip]=gzip [ip]=iproute2 [ss]=iproute2 [nft]=nftables
+    [curl]=curl [gzip]=gzip [gunzip]=gzip [ip]=iproute2 [ss]=iproute2
     [systemctl]=systemd [sysctl]=procps [awk]=mawk [grep]=grep [sed]=sed [wg]=wireguard-tools [modprobe]=kmod
   )
   for cmd in "${!map[@]}"; do
