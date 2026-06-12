@@ -18,7 +18,7 @@ MODE_FILE="$CONF_DIR/mode"
 SERVER_CONF="$CONF_DIR/server.conf"
 CLIENT_CONF="$CONF_DIR/client.conf"
 TUN_CONF="$CONF_DIR/tun2socks.yaml"
-WG_CONF="$CONF_DIR/wireguard.conf"
+WG_CONF="$CONF_DIR/getout-wg0.conf"
 ROUTES_UP="$CONF_DIR/routes-up.sh"
 ROUTES_DOWN="$CONF_DIR/routes-down.sh"
 RUNTIME_DNS_V4_SERVERS=("8.8.8.8" "1.1.1.1")
@@ -1730,7 +1730,7 @@ Table = off
 [Peer]
 PublicKey = ${WG_SERVER_PUBLIC_KEY}
 $(if [ -n "${WG_PRESHARED_KEY:-}" ]; then echo "PresharedKey = ${WG_PRESHARED_KEY}"; fi)
-Endpoint = ${WG_SERVER_ADDRESS}:${WG_SERVER_PORT}
+Endpoint = [${WG_SERVER_ADDRESS}]:${WG_SERVER_PORT}
 AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 25
 EOF

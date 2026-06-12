@@ -187,7 +187,7 @@ Table = off
 [Peer]
 PublicKey = ${WG_SERVER_PUBLIC_KEY}
 $(if [ -n "${WG_PRESHARED_KEY:-}" ]; then echo "PresharedKey = ${WG_PRESHARED_KEY}"; fi)
-Endpoint = ${WG_SERVER_ADDRESS}:${WG_SERVER_PORT}
+Endpoint = [${WG_SERVER_ADDRESS}]:${WG_SERVER_PORT}
 AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 25
 EOF
