@@ -244,8 +244,8 @@ prompt_wg_server_info() {
     echo -e "  地址: ${YELLOW}<无法检测本机IP>${NC}"
   fi
   echo "  端口: ${listen_port}"
-  echo "  公钥: ${server_pub}"
   echo "  私钥: ${peer_private}"
+  echo "  公钥: ${server_pub}"
   echo "========================================"
 }
 

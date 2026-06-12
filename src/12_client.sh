@@ -118,11 +118,11 @@ ask_wg_config() {
   server_port="${server_port:-$DEFAULT_WG_PORT}"
   [[ "$server_port" =~ ^[0-9]+$ ]] && [ "$server_port" -ge 1 ] && [ "$server_port" -le 65535 ] || fatal "端口无效：$server_port"
 
-  read -rp "公钥: " server_public_key
-  [ -n "$server_public_key" ] || fatal "服务端公钥不能为空。"
-
   read -rp "私钥: " client_private_key
   [ -n "$client_private_key" ] || fatal "客户端私钥不能为空。"
+
+  read -rp "公钥: " server_public_key
+  [ -n "$server_public_key" ] || fatal "服务端公钥不能为空。"
 
   write_wg_client_conf "$mode" "$server_addr" "$server_port" "$client_private_key" "$(default_wg_addr "$mode")" "$server_public_key" "" ""
 }
