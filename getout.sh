@@ -1015,7 +1015,7 @@ run ip route add default dev "$TUN_NAME" table "$TABLE_ID"
 run ip rule add lookup "$TABLE_ID" pref 20
 
 # V4+V6 双栈全局代理。
-if [ "$MODE" = "dual" ]; then
+if [ "$MODE" = "dual" ] || [ "$MODE" = "wg-dual" ]; then
   run ip -6 route add default dev "$TUN_NAME" table "$TABLE_ID"
   run ip -6 rule add lookup "$TABLE_ID" pref 20
 fi
