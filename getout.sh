@@ -1451,6 +1451,8 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+ExecStartPre=/sbin/sysctl -w net.ipv4.ip_forward=1
+ExecStartPre=/sbin/sysctl -w net.ipv6.conf.all.forwarding=1
 ExecStart=/usr/bin/wg-quick up $WG_CONF
 ExecStop=/usr/bin/wg-quick down $WG_CONF
 ExecStopPost=/usr/bin/wg-quick down $WG_CONF 2>/dev/null || true
