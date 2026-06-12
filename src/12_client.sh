@@ -110,18 +110,18 @@ default_wg_addr() {
 ask_wg_config() {
   local mode="$1" server_addr server_port server_public_key client_private_key
 
-  read -rp "请输入入口服务器地址: " server_addr
+  read -rp "地址: " server_addr
   server_addr="$(strip_brackets "$server_addr")"
   [ -n "$server_addr" ] || fatal "服务器地址不能为空。"
 
-  read -rp "请输入入口服务器端口 [默认: ${DEFAULT_WG_PORT}]: " server_port
+  read -rp "端口 [默认: ${DEFAULT_WG_PORT}]: " server_port
   server_port="${server_port:-$DEFAULT_WG_PORT}"
   [[ "$server_port" =~ ^[0-9]+$ ]] && [ "$server_port" -ge 1 ] && [ "$server_port" -le 65535 ] || fatal "端口无效：$server_port"
 
-  read -rp "请输入入口服务器公钥: " server_public_key
+  read -rp "公钥: " server_public_key
   [ -n "$server_public_key" ] || fatal "服务端公钥不能为空。"
 
-  read -rp "请输入客户端私钥（来自入口信息）: " client_private_key
+  read -rp "私钥: " client_private_key
   [ -n "$client_private_key" ] || fatal "客户端私钥不能为空。"
 
   write_wg_client_conf "$mode" "$server_addr" "$server_port" "$client_private_key" "$(default_wg_addr "$mode")" "$server_public_key" "" ""

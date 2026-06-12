@@ -184,42 +184,33 @@ install_server() {
 prompt_wg_server_info() {
   require_root; require_debian; install_deps
   ensure_conf_dir
-  local listen_addr listen_port private_key address
+  local listen_port
 
-  read -rp "请输入 WireGuard 监听地址 [默认: :: (双栈)]: " listen_addr
-  listen_addr="${listen_addr:-::}"
-  [[ "$listen_addr" =~ ^[0-9a-fA-F.:]+$ ]] || [[ "$listen_addr" == "::" ]] || fatal "地址无效：$listen_addr"
-
-  read -rp "请输入 WireGuard 监听端口 [默认: ${DEFAULT_WG_PORT}]: " listen_port
+  # 只询问端口
+  read -rp "端口 [默认: ${DEFAULT_WG_PORT}]: " listen_port
   listen_port="${listen_port:-$DEFAULT_WG_PORT}"
   [[ "$listen_port" =~ ^[0-9]+$ ]] && [ "$listen_port" -ge 1 ] && [ "$listen_port" -le 65535 ] || fatal "端口无效：$listen_port"
 
+  # 固定参数（无需询问）
+  local listen_addr="::"
+  local address="$DEFAULT_WG_ADDRESS"
+  local full_address="${address}, ${DEFAULT_WG_V6_ADDRESS}"
+
   # 自动生成服务端密钥对
+  local private_key
   private_key="$(wg genkey)" || fatal "生成私钥失败，请确认 wireguard-tools 已安装。"
   local server_pub
   server_pub="$(printf '%s' "$private_key" | wg pubkey)" || fatal "派生公钥失败。"
 
-  read -rp "请输入服务端隧道地址/掩码 [默认: ${DEFAULT_WG_ADDRESS}]: " address
-  address="${address:-$DEFAULT_WG_ADDRESS}"
-
-  # 服务端隧道地址：IPv4 + IPv6（用逗号分隔，WireGuard 原生支持）
-  local full_address="${address}, ${DEFAULT_WG_V6_ADDRESS}"
+  # 自动生成客户端密钥对
+  local peer_private peer_public_key
+  peer_private="$(wg genkey)" || fatal "生成客户端私钥失败。"
+  peer_public_key="$(printf '%s' "$peer_private" | wg pubkey)" || fatal "派生客户端公钥失败。"
 
   # 从隧道地址推导对端 IP：服务端 .1 → 对端 .2
   local peer4="${address%.*}.2/32"
   local peer6="${DEFAULT_WG_V6_ADDRESS%%::*}::2/128"
-  local default_allowed="${peer4},${peer6}"
-
-  read -rp "请输入对端允许的 IP (AllowedIPs) [默认: ${default_allowed}]: " allowed_ips
-  allowed_ips="${allowed_ips:-$default_allowed}"
-
-  # 询问客户端公钥（留空自动生成客户端密钥对）
-  local peer_private="" peer_public_key
-  read -rp "请输入出口客户端公钥 [留空自动生成]: " peer_public_key
-  if [ -z "$peer_public_key" ]; then
-    peer_private="$(wg genkey)" || fatal "生成客户端私钥失败。"
-    peer_public_key="$(printf '%s' "$peer_private" | wg pubkey)" || fatal "派生客户端公钥失败。"
-  fi
+  local allowed_ips="${peer4},${peer6}"
 
   # 写入配置
   {
@@ -233,31 +224,29 @@ prompt_wg_server_info() {
   } > "$SERVER_CONF"
   chmod_private_file "$SERVER_CONF"
 
-  # 显示入口信息（所有字段）
+  # 显示入口信息
   echo ""
-  echo -e "${GREEN}========================================${NC}"
-  echo -e "${GREEN} 入口信息（请复制到出口机器使用）:${NC}"
-  echo -e "${GREEN}========================================${NC}"
+  echo "========================================"
+  echo " 入口信息"
+  echo "========================================"
   local ipv4 ipv6
   ipv4="$(main_ipv4 || true)"
   ipv6="$(main_ipv6 || true)"
   if [ -n "$ipv4" ] && [ -n "$ipv6" ]; then
-    echo -e "  地址:"
-    echo -e "    IPv4: ${BLUE}${ipv4}${NC}"
-    echo -e "    IPv6: ${BLUE}${ipv6}${NC}"
+    echo "  地址:"
+    echo "    IPv4: ${ipv4}"
+    echo "    IPv6: ${ipv6}"
   elif [ -n "$ipv4" ]; then
-    echo -e "  地址: ${BLUE}${ipv4}${NC}"
+    echo "  地址: ${ipv4}"
   elif [ -n "$ipv6" ]; then
-    echo -e "  地址: ${BLUE}${ipv6}${NC}"
+    echo "  地址: ${ipv6}"
   else
     echo -e "  地址: ${YELLOW}<无法检测本机IP>${NC}"
   fi
-  echo -e "  端口: ${BLUE}${listen_port}${NC}"
-  echo -e "  公钥: ${BLUE}${server_pub}${NC}"
-  if [ -n "$peer_private" ]; then
-    echo -e "  客户端私钥: ${BLUE}${peer_private}${NC}"
-  fi
-  echo -e "${GREEN}========================================${NC}"
+  echo "  端口: ${listen_port}"
+  echo "  公钥: ${server_pub}"
+  echo "  私钥: ${peer_private}"
+  echo "========================================"
 }
 
 write_wg_server_service() {
