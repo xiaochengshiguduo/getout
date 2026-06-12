@@ -201,14 +201,22 @@ status() {
       echo "端口: ${LISTEN_PORT:-}"
       echo "公钥: ${PEER_PUBLIC_KEY:-}"
     else
-      echo "类型: SOCKS5 (gost)"
-      echo "监听端口: ${PORT:-}"
+      echo "类型: SOCKS5"
+      local ipv4 ipv6
+      ipv4="$(main_ipv4 || true)"
+      ipv6="$(main_ipv6 || true)"
+      if [ -n "$ipv4" ] && [ -n "$ipv6" ]; then
+        echo "地址: ${ipv4}"
+        echo "      ${ipv6}"
+      elif [ -n "$ipv4" ]; then
+        echo "地址: ${ipv4}"
+      elif [ -n "$ipv6" ]; then
+        echo "地址: ${ipv6}"
+      fi
+      echo "端口: ${PORT:-}"
       if [ -n "${USERNAME:-}" ]; then
-        echo "认证: 开启"
         echo "用户名: ${USERNAME:-}"
         echo "密码: ${PASSWORD:-}"
-      else
-        echo "认证: 关闭"
       fi
     fi
   else
