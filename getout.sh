@@ -2272,16 +2272,16 @@ status() {
     . "$SERVER_CONF"
     if [ "${SERVER_MODE:-}" = "wireguard" ]; then
       echo "类型: WireGuard"
-      local addr="${ADDRESS:-}"
-      local v4_part="${addr%%,*}"
-      v4_part="${v4_part// /}"
-      local v6_part="${addr#*,}"
-      v6_part="${v6_part# }"
-      if [ -n "$v6_part" ] && [ "$v6_part" != "$addr" ]; then
-        echo "地址: ${v4_part}"
-        echo "      ${v6_part}"
-      else
-        echo "地址: ${addr}"
+      local ipv4 ipv6
+      ipv4="$(main_ipv4 || true)"
+      ipv6="$(main_ipv6 || true)"
+      if [ -n "$ipv4" ] && [ -n "$ipv6" ]; then
+        echo "地址: ${ipv4}"
+        echo "      ${ipv6}"
+      elif [ -n "$ipv4" ]; then
+        echo "地址: ${ipv4}"
+      elif [ -n "$ipv6" ]; then
+        echo "地址: ${ipv6}"
       fi
       echo "端口: ${LISTEN_PORT:-}"
       echo "公钥: ${PEER_PUBLIC_KEY:-}"
