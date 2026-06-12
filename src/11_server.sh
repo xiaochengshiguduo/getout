@@ -198,6 +198,9 @@ prompt_wg_server_info() {
   read -rp "请输入服务端隧道地址/掩码 [默认: ${DEFAULT_WG_ADDRESS}]: " address
   address="${address:-$DEFAULT_WG_ADDRESS}"
 
+  # 服务端隧道地址：IPv4 + IPv6（用逗号分隔，WireGuard 原生支持）
+  local full_address="${address}, ${DEFAULT_WG_V6_ADDRESS}"
+
   # 从隧道地址推导对端 IP：服务端 .1 → 对端 .2
   local peer4="${address%.*}.2/32"
   local peer6="${DEFAULT_WG_V6_ADDRESS%%::*}::2/128"
@@ -211,7 +214,7 @@ prompt_wg_server_info() {
     printf 'LISTEN_ADDRESS=%s\n' "$(shell_quote "$listen_addr")"
     printf 'LISTEN_PORT=%s\n' "$(shell_quote "$listen_port")"
     printf 'PRIVATE_KEY=%s\n' "$(shell_quote "$private_key")"
-    printf 'ADDRESS=%s\n' "$(shell_quote "$address")"
+    printf 'ADDRESS=%s\n' "$(shell_quote "$full_address")"
     printf 'PEER_PUBLIC_KEY=%s\n' "$(shell_quote "$peer_public_key")"
     printf 'ALLOWED_IPS=%s\n' "$(shell_quote "$allowed_ips")"
   } > "$SERVER_CONF"
@@ -262,7 +265,10 @@ write_wg_server_service() {
   if [ -n "${ALLOWED_IPS:-}" ]; then
     peer_allowed="$ALLOWED_IPS"
   else
-    peer_allowed="${ADDRESS%.*}.2/32,${DEFAULT_WG_V6_ADDRESS%%::*}::2/128"
+    # 兼容旧配置：从 ADDRESS 提取 IPv4 部分推导 AllowedIPs
+    local addr_v4="${ADDRESS%%,*}"
+    addr_v4="${addr_v4// /}"
+    peer_allowed="${addr_v4%.*}.2/32,${DEFAULT_WG_V6_ADDRESS%%::*}::2/128"
   fi
 
   # 写入 WireGuard 配置文件
