@@ -28,6 +28,7 @@
 - `/dev/net/tun` 可用
 - systemd
 - `wireguard-tools`（WireGuard 模式需要，脚本会自动安装）
+- `nftables`（可选，用于入站连接回包保护；没有则跳过）
 - 支持 IPv4、IPv6 或双栈 VPS
 
 ## 快速使用
@@ -128,9 +129,9 @@ getout-gost.service
 
 当前 VPS 作为 WireGuard 服务端，通过内核级 WireGuard 隧道提供代理入口。
 
-只需填写：监听地址、监听端口、隧道地址、AllowedIPs，密钥全部自动生成。
+只需填写端口（默认 62233），其余全部自动生成：监听地址、隧道地址、AllowedIPs、服务端/客户端密钥对。
 
-配置完成后会显示出口模式需要的 4 个值：服务端公钥、客户端私钥、服务器地址、服务器端口。
+配置完成后会显示出口模式需要的 4 个值：服务器地址、服务器端口、客户端私钥、服务端公钥。
 
 支持 ICMP 流量转发，这是相比 SOCKS5 的主要优势。
 
@@ -161,18 +162,14 @@ getout-wg.service
 
 ### WG-V4/Dual 出口
 
-通过 WireGuard 隧道接管本机流量。支持 s5-V4 单栈和 s5-V4+V6 双栈两种子模式。
+通过 WireGuard 隧道接管本机流量。支持 WG-V4 单栈和 WG-V4+V6 双栈两种子模式。
 
 相比 tun2socks 模式的主要优势：
 - 支持 ICMP 流量（`ping` 可用）
 - 内核级实现，性能更好
 - UDP 原生支持
 
-配置参数：服务器地址/端口、隧道地址、DNS、PresharedKey（可选）。
-
-密钥处理：
-- 客户端私钥留空回车自动生成，同时显示派生公钥（需复制到服务端配置）
-- 服务端公钥留空可跳过，后续获取服务端公钥后手动编辑 `/etc/getout/client.conf` 替换 `WG_SERVER_PUBLIC_KEY`
+配置只需 4 个字段（由入口端提供）：服务器地址、服务器端口、客户端私钥、服务端公钥。隧道地址自动分配。
 
 对应服务：
 
@@ -217,8 +214,8 @@ V6 优先模式会：
 - 自动检测 SSH 实际监听端口并保护 SSH 回包，不依赖 SSH 是否使用 22 端口；
 - 启动或重启出口前会显示 SSH 回包保护检测结果，检测不足时会给出断联风险警告；
 - 保护上游 SOCKS5 和运行期 DNS 路由，避免代理回环；
-- 使用 nftables/conntrack 保护外部主动连入本机的连接回包，避免影响 sing-box、xray、hysteria、tuic、nginx 等本机入站服务；
-- tun2socks 出口启动前会校验 nftables 入站回包保护是否可用，校验失败会停止启动，避免保护未生效却静默运行。
+- 使用 nftables/conntrack（可选）保护外部主动连入本机的连接回包，避免影响 sing-box、xray、hysteria、tuic、nginx 等本机入站服务；
+- tun2socks 出口启动前会检查 nftables 入站回包保护是否可用，如果 nftables 可用则启用保护，不可用则跳过（nftables 为可选依赖）。
 
 `ping`/ICMP 不经过 SOCKS 出口代理（tun2socks 模式），`ping` 不通不代表 TCP/UDP 出口不可用。使用 WireGuard 出口时 ICMP 正常工作。建议使用 `curl` 或应用自身连接测试确认出口状态。
 
@@ -317,6 +314,7 @@ getout check
 
 - root 权限、Debian、systemd、TUN、iproute2、curl、sha256sum；
 - `wireguard-tools`（`wg`/`wg-quick` 命令）是否可用；
+- `nftables`（可选，有则检查可用性）；
 - `/etc/getout` 和配置文件权限；
 - 入口/出口二进制和 systemd unit 是否存在；
 - 生成的路由脚本语法；
@@ -372,12 +370,12 @@ tests/run.sh
 ## 注意事项
 
 - 仅支持 Debian。
-- WireGuard 模式需要 `wireguard-tools`，脚本会自动安装；需要自行生成或提供密钥对。
+- WireGuard 模式需要 `wireguard-tools`，脚本会自动安装；密钥对由入口模式自动生成或由入口端提供。
 - WireGuard 出口下 `ping`/ICMP 正常工作，不受 tun2socks 限制。
 - 脚本会在常规下载失败后临时修改 `/etc/resolv.conf` 使用 DNS64，DNS64 下载结束后恢复。
 - 出口运行时会临时修改 `/etc/resolv.conf` 和 `/etc/gai.conf`，停止或卸载时恢复。
 - `/etc/resolv.conf` 和 `/etc/gai.conf` 的恢复依赖首次接管前保存的原始备份和 checksum；如果备份缺失或运行期间被外部修改，脚本会警告并避免盲目覆盖当前内容。
-- 出口启动前会创建临时 nftables 表做兼容性预检，预检失败不会继续启动。
+- 出口启动前会检查 nftables 是否可用，可用则创建临时 nftables 表做入站回包保护，不可用则跳过（nftables 为可选依赖）。
 - `/etc/getout` 会设置为私有目录，配置文件包含代理账号密码。
 - 脚本在读取配置文件前会校验配置由 root 拥有，且 group/other 不可写。
 - 入口必须设置用户名密码；用户名和密码不能包含空白字符或 URL 保留字符。
@@ -390,7 +388,7 @@ tests/run.sh
 - 交互录入和 `status` 会明文显示入口/出口密码，这是为了在可信终端快速核对配置；不要把状态页截图或日志发到公开场所。
 - `ping`/ICMP 不经过 SOCKS 出口代理（tun2socks 模式），排障时请优先使用 `curl` 或真实应用连接测试。WireGuard 出口下 ICMP 正常工作。
 - `/etc/resolv.conf` 若由 systemd-resolved、NetworkManager、VPS 面板等外部组件并发管理，getout 会尽量保留外部修改并报警；遇到 DNS 异常时先检查 `/etc/getout/resolv.conf.*` 和当前 `/etc/resolv.conf`。
-- 出口依赖 TUN、nftables、conntrack/fib 规则能力；如果 `getout doctor` 或启动 preflight 失败，请先按错误提示处理内核/系统能力问题。
+- 出口依赖 TUN、conntrack/fib 规则能力；nftables 为可选依赖（有则启用入站回包保护，无则跳过）。如果 `getout doctor` 或启动 preflight 失败，请先按错误提示处理内核/系统能力问题。
 - 更新后如果服务正在运行，建议执行 `getout restart`，让 systemd unit 和路由脚本刷新到最新版本。
 - 当前 SHA256 是完整性校验，不是强签名；如果需要更强供应链保护，请使用可信网络、固定 SHA256，或后续接入 GPG/minisign 签名发布。
 - `gost` 和 `hev-socks5-tunnel` 第三方二进制当前做固定 SHA256 完整性校验，但仍不是 GPG/minisign 强签名；高安全场景请自行固定可信来源或接入强签名验证。
