@@ -37,6 +37,10 @@ restart_getout() {
     . "$SERVER_CONF"
     [ "${SERVER_MODE:-}" = "wireguard" ] || fatal "入口配置不是 WireGuard 模式。"
     write_wg_server_service
+    # 清理可能残留的接口
+    if ip link show getout-wg0 &>/dev/null; then
+      wg-quick down "$WG_CONF" 2>/dev/null || ip link del getout-wg0 2>/dev/null || true
+    fi
     systemctl restart getout-wg.service
     sleep 2
     if ! systemctl is-active --quiet getout-wg.service; then

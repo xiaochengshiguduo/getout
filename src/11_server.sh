@@ -41,6 +41,11 @@ stop_client_keep_config() {
   mode="$(current_mode)"
   if [[ "$mode" =~ ^wg- ]]; then
     systemctl stop getout-wg.service 2>/dev/null || true
+    # 服务可能处于 failed 状态，systemctl stop 不执行 ExecStopPost
+    # 手动清理 WireGuard 接口作为兜底
+    if ip link show getout-wg0 &>/dev/null; then
+      wg-quick down "$WG_CONF" 2>/dev/null || ip link del getout-wg0 2>/dev/null || true
+    fi
     cleanup_rules
     systemctl disable getout-wg.service 2>/dev/null || true
   else
@@ -52,6 +57,10 @@ stop_client_keep_config() {
 
 stop_wg_server_keep_config() {
   systemctl stop getout-wg.service 2>/dev/null || true
+  # 服务可能处于 failed 状态，手动清理接口兜底
+  if ip link show getout-wg0 &>/dev/null; then
+    wg-quick down "$WG_CONF" 2>/dev/null || ip link del getout-wg0 2>/dev/null || true
+  fi
   systemctl disable getout-wg.service 2>/dev/null || true
 }
 

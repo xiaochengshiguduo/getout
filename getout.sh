@@ -823,6 +823,10 @@ preflight_wg_runtime_with_rollback() {
 
 restart_wg_with_rollback() {
   local snapshot="$1" action="${2:-restart}"
+  # 清理可能残留的接口（服务 failed 后 ExecStopPost 未执行）
+  if ip link show getout-wg0 &>/dev/null; then
+    wg-quick down "$WG_CONF" 2>/dev/null || ip link del getout-wg0 2>/dev/null || true
+  fi
   if [ "$action" = "enable" ]; then
     systemctl enable --now getout-wg.service
   else
@@ -1219,6 +1223,11 @@ stop_client_keep_config() {
   mode="$(current_mode)"
   if [[ "$mode" =~ ^wg- ]]; then
     systemctl stop getout-wg.service 2>/dev/null || true
+    # 服务可能处于 failed 状态，systemctl stop 不执行 ExecStopPost
+    # 手动清理 WireGuard 接口作为兜底
+    if ip link show getout-wg0 &>/dev/null; then
+      wg-quick down "$WG_CONF" 2>/dev/null || ip link del getout-wg0 2>/dev/null || true
+    fi
     cleanup_rules
     systemctl disable getout-wg.service 2>/dev/null || true
   else
@@ -1230,6 +1239,10 @@ stop_client_keep_config() {
 
 stop_wg_server_keep_config() {
   systemctl stop getout-wg.service 2>/dev/null || true
+  # 服务可能处于 failed 状态，手动清理接口兜底
+  if ip link show getout-wg0 &>/dev/null; then
+    wg-quick down "$WG_CONF" 2>/dev/null || ip link del getout-wg0 2>/dev/null || true
+  fi
   systemctl disable getout-wg.service 2>/dev/null || true
 }
 
@@ -2188,6 +2201,10 @@ restart_getout() {
     . "$SERVER_CONF"
     [ "${SERVER_MODE:-}" = "wireguard" ] || fatal "入口配置不是 WireGuard 模式。"
     write_wg_server_service
+    # 清理可能残留的接口
+    if ip link show getout-wg0 &>/dev/null; then
+      wg-quick down "$WG_CONF" 2>/dev/null || ip link del getout-wg0 2>/dev/null || true
+    fi
     systemctl restart getout-wg.service
     sleep 2
     if ! systemctl is-active --quiet getout-wg.service; then
