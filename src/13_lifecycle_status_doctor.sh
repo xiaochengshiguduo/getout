@@ -187,9 +187,19 @@ status() {
     . "$SERVER_CONF"
     if [ "${SERVER_MODE:-}" = "wireguard" ]; then
       echo "类型: WireGuard"
-      echo "监听地址: ${LISTEN_ADDRESS:-0.0.0.0}:${LISTEN_PORT:-}"
-      echo "隧道地址: ${ADDRESS:-}"
-      echo "对端公钥: ${PEER_PUBLIC_KEY:-}"
+      echo "端口: ${LISTEN_PORT:-}"
+      local addr="${ADDRESS:-}"
+      local v4_part="${addr%%,*}"
+      v4_part="${v4_part// /}"
+      local v6_part="${addr#*,}"
+      v6_part="${v6_part# }"
+      if [ -n "$v6_part" ] && [ "$v6_part" != "$addr" ]; then
+        echo "地址: ${v4_part}"
+        echo "      ${v6_part}"
+      else
+        echo "地址: ${addr}"
+      fi
+      echo "公钥: ${PEER_PUBLIC_KEY:-}"
     else
       echo "类型: SOCKS5 (gost)"
       echo "监听端口: ${PORT:-}"
