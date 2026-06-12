@@ -12,7 +12,7 @@
 - s5-V4+V6 双栈模式：使用 `hev-socks5-tunnel` 同时接管本机 IPv4 和 IPv6 流量。
 - WG-V4/Dual 出口：通过 WireGuard 隧道接管流量，支持 ICMP，解决 tun2socks 无法代理 ICMP 的限制。
 - 全局命令：首次运行后自动安装 `/usr/local/bin/getout`，之后直接输入 `getout` 打开管理面板。
-- 一键更新：支持 `getout update` 或在管理面板选择 `9.更新 getout`。
+- 一键更新：支持 `getout update` 或在管理面板选择 `12.更新 getout`。
 - V4/V6 优先模式：可在管理面板动态切换 V4 优先或 V6 优先，默认 V6 优先。
 - 运行期 DNS 策略：V4 优先模式使用 IPv4 DNS，V6 优先模式使用 IPv6 DNS。
 - 下载阶段先尝试常规下载，失败后使用 DNS64 兜底，兼容 IPv4、IPv6 和双栈 VPS。
@@ -253,7 +253,7 @@ getout update
 也可以在管理面板选择：
 
 ```text
-9.更新 getout
+12.更新 getout
 ```
 
 更新成功后会显示当前版本。
@@ -378,7 +378,7 @@ tests/run.sh
 - 出口启动前会检查 nftables 是否可用，可用则创建临时 nftables 表做入站回包保护，不可用则跳过（nftables 为可选依赖）。
 - `/etc/getout` 会设置为私有目录，配置文件包含代理账号密码。
 - 脚本在读取配置文件前会校验配置由 root 拥有，且 group/other 不可写。
-- 入口必须设置用户名密码；用户名和密码不能包含空白字符或 URL 保留字符。
+- SOCKS5 入口必须设置用户名密码；用户名和密码不能包含空白字符或 URL 保留字符。
 - `ping`/ICMP 不经过 SOCKS 出口代理，出口连通性请优先用 TCP/UDP 应用测试。
 - 请确保 VPS 面板已开启 TUN。
 - 交互录入和状态页都会明文显示入口/出口密码，请只在可信终端使用。
@@ -403,6 +403,7 @@ tests/run.sh
 - `gost v2.11.5`
 - `hev-socks5-tunnel 2.15.0`
 - `wireguard-tools 1.0.20210223`
+- WireGuard 端到端：入口（IPv4+IPv6 双栈）+ 出口（IPv6-only VPS），wg-v4 / wg-dual 模式均测试通过，ICMP 正常
 
 ## License
 
