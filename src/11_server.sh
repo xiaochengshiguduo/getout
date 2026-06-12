@@ -204,7 +204,27 @@ prompt_wg_server_info() {
   read -rp "请输入对端允许的 IP (AllowedIPs) [默认: ${default_allowed}]: " allowed_ips
   allowed_ips="${allowed_ips:-$default_allowed}"
 
-  # 显示入口信息
+  # 询问客户端公钥（留空自动生成客户端密钥对）
+  local peer_private="" peer_public_key
+  read -rp "请输入出口客户端公钥 [留空自动生成]: " peer_public_key
+  if [ -z "$peer_public_key" ]; then
+    peer_private="$(wg genkey)" || fatal "生成客户端私钥失败。"
+    peer_public_key="$(printf '%s' "$peer_private" | wg pubkey)" || fatal "派生客户端公钥失败。"
+  fi
+
+  # 写入配置
+  {
+    printf 'SERVER_MODE=wireguard\n'
+    printf 'LISTEN_ADDRESS=%s\n' "$(shell_quote "$listen_addr")"
+    printf 'LISTEN_PORT=%s\n' "$(shell_quote "$listen_port")"
+    printf 'PRIVATE_KEY=%s\n' "$(shell_quote "$private_key")"
+    printf 'ADDRESS=%s\n' "$(shell_quote "$full_address")"
+    printf 'PEER_PUBLIC_KEY=%s\n' "$(shell_quote "$peer_public_key")"
+    printf 'ALLOWED_IPS=%s\n' "$(shell_quote "$allowed_ips")"
+  } > "$SERVER_CONF"
+  chmod_private_file "$SERVER_CONF"
+
+  # 显示入口信息（所有字段）
   echo ""
   echo -e "${GREEN}========================================${NC}"
   echo -e "${GREEN} 入口信息（请复制到出口机器使用）:${NC}"
@@ -225,27 +245,10 @@ prompt_wg_server_info() {
   fi
   echo -e "  端口: ${BLUE}${listen_port}${NC}"
   echo -e "  公钥: ${BLUE}${server_pub}${NC}"
-
-  # 询问客户端公钥
-  local peer_private peer_public_key
-  read -rp "请输入出口客户端公钥 [留空自动生成]: " peer_public_key
-  if [ -z "$peer_public_key" ]; then
-    peer_private="$(wg genkey)" || fatal "生成客户端私钥失败。"
-    peer_public_key="$(printf '%s' "$peer_private" | wg pubkey)" || fatal "派生客户端公钥失败。"
-    echo -e "  ${YELLOW}客户端私钥: ${BLUE}${peer_private}${NC}${YELLOW}（请复制到出口机器）${NC}"
+  if [ -n "$peer_private" ]; then
+    echo -e "  客户端私钥: ${BLUE}${peer_private}${NC}"
   fi
   echo -e "${GREEN}========================================${NC}"
-
-  {
-    printf 'SERVER_MODE=wireguard\n'
-    printf 'LISTEN_ADDRESS=%s\n' "$(shell_quote "$listen_addr")"
-    printf 'LISTEN_PORT=%s\n' "$(shell_quote "$listen_port")"
-    printf 'PRIVATE_KEY=%s\n' "$(shell_quote "$private_key")"
-    printf 'ADDRESS=%s\n' "$(shell_quote "$full_address")"
-    printf 'PEER_PUBLIC_KEY=%s\n' "$(shell_quote "$peer_public_key")"
-    printf 'ALLOWED_IPS=%s\n' "$(shell_quote "$allowed_ips")"
-  } > "$SERVER_CONF"
-  chmod_private_file "$SERVER_CONF"
 }
 
 write_wg_server_service() {
