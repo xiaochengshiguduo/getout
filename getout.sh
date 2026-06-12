@@ -618,6 +618,28 @@ ssh_listen_ports() {
   } | awk '/^[0-9]+$/ && $1 >= 1 && $1 <= 65535 {seen[$1]=1} END {for (p in seen) print p}' | sort -n
 }
 
+# --- subnet helpers for NAT rules -------------------------------------------
+
+# 从 addr/prefix 计算 IPv4 网络 CIDR (例: 10.66.66.1/24 → 10.66.66.0/24)
+get_v4_network() {
+  local addr="${1%%/*}" prefix="${1##*/}"
+  IFS=. read -r a b c d <<< "$addr"
+  local ip=$(( (a << 24) + (b << 16) + (c << 8) + d ))
+  local mask=$(( 0xFFFFFFFF << (32 - prefix) & 0xFFFFFFFF ))
+  local net=$(( ip & mask ))
+  echo "$(( (net >> 24) & 255 )).$(( (net >> 16) & 255 )).$(( (net >> 8) & 255 )).$(( net & 255 ))/$prefix"
+}
+
+# 从 addr/prefix 计算 IPv6 网络 CIDR (例: fd86:ea04:1115::1/64 → fd86:ea04:1115::/64)
+get_v6_network() {
+  local addr="${1%%/*}" prefix="${1##*/}"
+  if [[ "$addr" == *"::"* ]]; then
+    echo "${addr%%::*}::/$prefix"
+  else
+    echo "$addr/$prefix"
+  fi
+}
+
 main_ipv4() {
   ip -4 route get 1.1.1.1 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}' || true
 }
@@ -1428,13 +1450,43 @@ write_wg_server_service() {
     peer_allowed="${addr_v4%.*}.2/32,${DEFAULT_WG_V6_ADDRESS%%::*}::2/128"
   fi
 
+  # 从 ADDRESS 提取子网并生成 NAT 规则
+  local nat_up="" nat_down=""
+  local v4_net="" v6_net=""
+  local addr_part
+  for addr_part in ${ADDRESS//,/ }; do
+    addr_part="${addr_part// /}"
+    [ -n "$addr_part" ] || continue
+    if is_ipv6 "${addr_part%%/*}"; then
+      v6_net="$(get_v6_network "$addr_part")"
+    else
+      v4_net="$(get_v4_network "$addr_part")"
+    fi
+  done
+  [ -n "$v4_net" ] && {
+    nat_up+="PostUp = iptables -t nat -A POSTROUTING -s $v4_net ! -o %i -j MASQUERADE\n"
+    nat_up+="PostUp = iptables -A FORWARD -i %i -j ACCEPT\n"
+    nat_up+="PostUp = iptables -A FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT\n"
+    nat_down+="PostDown = iptables -t nat -D POSTROUTING -s $v4_net ! -o %i -j MASQUERADE\n"
+    nat_down+="PostDown = iptables -D FORWARD -i %i -j ACCEPT\n"
+    nat_down+="PostDown = iptables -D FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT\n"
+  }
+  [ -n "$v6_net" ] && command -v ip6tables >/dev/null 2>&1 && {
+    nat_up+="PostUp = ip6tables -t nat -A POSTROUTING -s $v6_net ! -o %i -j MASQUERADE\n"
+    nat_up+="PostUp = ip6tables -A FORWARD -i %i -j ACCEPT\n"
+    nat_up+="PostUp = ip6tables -A FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT\n"
+    nat_down+="PostDown = ip6tables -t nat -D POSTROUTING -s $v6_net ! -o %i -j MASQUERADE\n"
+    nat_down+="PostDown = ip6tables -D FORWARD -i %i -j ACCEPT\n"
+    nat_down+="PostDown = ip6tables -D FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT\n"
+  }
+
   # 写入 WireGuard 配置文件
   cat > "$WG_CONF" <<EOF
 [Interface]
 Address = ${ADDRESS}
 ListenPort = ${LISTEN_PORT}
 PrivateKey = ${PRIVATE_KEY}
-
+$(echo -e "$nat_up$nat_down")
 [Peer]
 PublicKey = ${PEER_PUBLIC_KEY}
 AllowedIPs = ${peer_allowed}
@@ -1472,6 +1524,7 @@ start_wg_server() {
   begin_server_rollback "$snapshot"
   stop_client_keep_config
   stop_server_keep_config
+  stop_wg_server_keep_config
   if [ -f "$SERVER_CONF" ] && grep -q '^SERVER_MODE=wireguard' "$SERVER_CONF"; then
     assert_private_config "$SERVER_CONF"
     # shellcheck disable=SC1090
