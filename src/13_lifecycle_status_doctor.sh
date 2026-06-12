@@ -231,12 +231,24 @@ status() {
     . "$CLIENT_CONF"
     if [ "${TRANSPORT:-}" = "wireguard" ]; then
       echo "类型: WireGuard"
-      echo "服务器: ${WG_SERVER_ADDRESS:-}:${WG_SERVER_PORT:-}"
-      echo "客户端地址: ${WG_CLIENT_ADDRESS:-}"
-      echo "DNS: ${WG_DNS:-}"
+      local addr="${WG_SERVER_ADDRESS:-}"
+      local port="${WG_SERVER_PORT:-}"
+      local v4_part="${addr%%,*}"
+      v4_part="${v4_part// /}"
+      local v6_part="${addr#*,}"
+      v6_part="${v6_part# }"
+      if [ -n "$v6_part" ] && [ "$v6_part" != "$addr" ]; then
+        echo "地址: ${v4_part}"
+        echo "      ${v6_part}"
+      else
+        echo "地址: ${addr}"
+      fi
+      echo "端口: ${port}"
+      echo "公钥: ${WG_SERVER_PUBLIC_KEY:-}"
     else
       echo "类型: SOCKS5"
-      echo "地址: [${SOCKS_ADDRESS:-}]:${SOCKS_PORT:-}"
+      echo "地址: ${SOCKS_ADDRESS:-}"
+      echo "端口: ${SOCKS_PORT:-}"
       echo "用户名: ${SOCKS_USERNAME:-}"
       echo "密码: ${SOCKS_PASSWORD:-}"
     fi
