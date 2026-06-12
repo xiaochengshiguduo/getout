@@ -1405,7 +1405,6 @@ prompt_wg_server_info() {
     echo -e "  客户端私钥: ${BLUE}${peer_private}${NC}"
   fi
   echo -e "${GREEN}========================================${NC}"
-  read -rp "按回车继续..." _unused
 }
 
 write_wg_server_service() {
