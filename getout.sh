@@ -1696,6 +1696,15 @@ reuse_client_config_for_mode() {
   return 0
 }
 
+# 根据 WG 模式返回客户端隧道地址
+default_wg_addr() {
+  local mode="${1:-wg-v4}"
+  case "$mode" in
+    wg-dual) echo "10.66.66.2/32, fd86:ea04:1115::2/128" ;;
+    *)       echo "10.66.66.2/32" ;;
+  esac
+}
+
 ask_wg_config() {
   local mode="$1" server_addr server_port server_public_key client_private_key
 
@@ -1713,7 +1722,7 @@ ask_wg_config() {
   read -rp "请输入客户端私钥（来自入口信息）: " client_private_key
   [ -n "$client_private_key" ] || fatal "客户端私钥不能为空。"
 
-  write_wg_client_conf "$mode" "$server_addr" "$server_port" "$client_private_key" "10.66.66.2/32" "$server_public_key" "" ""
+  write_wg_client_conf "$mode" "$server_addr" "$server_port" "$client_private_key" "$(default_wg_addr "$mode")" "$server_public_key" "" ""
 }
 
 write_wg_client_conf() {
@@ -1763,8 +1772,20 @@ reuse_wg_client_config() {
   [ "${TRANSPORT:-}" = "wireguard" ] || return 1
   [ -n "${WG_SERVER_ADDRESS:-}" ] && [ -n "${WG_SERVER_PORT:-}" ] || return 1
   [ -n "${WG_CLIENT_PRIVATE_KEY:-}" ] && [ -n "${WG_SERVER_PUBLIC_KEY:-}" ] || return 1
-  # Rewrite with the new mode to update MODE field
-  write_wg_client_conf "$mode" "$WG_SERVER_ADDRESS" "$WG_SERVER_PORT" "$WG_CLIENT_PRIVATE_KEY" "${WG_CLIENT_ADDRESS:-10.66.66.2/32}" "$WG_SERVER_PUBLIC_KEY" "${WG_PRESHARED_KEY:-}" "${WG_DNS:-$DEFAULT_WG_DNS}"
+  # Rewrite with the new mode to update MODE field; use mode-appropriate default address
+  local addr="${WG_CLIENT_ADDRESS:-$(default_wg_addr "$mode")}"
+  # If switching modes, update address to match new mode
+  case "$mode" in
+    wg-dual)
+      # Ensure IPv6 address is present
+      [[ "$addr" == *"fd86:ea04:1115"* ]] || addr="$(default_wg_addr "$mode")"
+      ;;
+    wg-v4)
+      # For v4-only, strip any IPv6 part
+      addr="10.66.66.2/32"
+      ;;
+  esac
+  write_wg_client_conf "$mode" "$WG_SERVER_ADDRESS" "$WG_SERVER_PORT" "$WG_CLIENT_PRIVATE_KEY" "$addr" "$WG_SERVER_PUBLIC_KEY" "${WG_PRESHARED_KEY:-}" "${WG_DNS:-$DEFAULT_WG_DNS}"
   return 0
 }
 
@@ -1778,7 +1799,7 @@ write_wg_config() {
   cat > "$WG_CONF" <<EOF
 [Interface]
 PrivateKey = ${WG_CLIENT_PRIVATE_KEY}
-Address = ${WG_CLIENT_ADDRESS:-10.66.66.2/32}
+Address = ${WG_CLIENT_ADDRESS:-$(default_wg_addr "${MODE:-wg-v4}")}
 $(if [ -n "${WG_DNS:-$DEFAULT_WG_DNS}" ]; then echo "DNS = ${WG_DNS:-$DEFAULT_WG_DNS}"; fi)
 Table = off
 
@@ -2069,7 +2090,7 @@ switch_priority_mode() {
       v4) priority_mode="v6" ;;
       *) priority_mode="v4" ;;
     esac
-    write_wg_client_conf "$mode" "$WG_SERVER_ADDRESS" "$WG_SERVER_PORT" "$WG_CLIENT_PRIVATE_KEY" "${WG_CLIENT_ADDRESS:-10.66.66.2/32}" "$WG_SERVER_PUBLIC_KEY" "${WG_PRESHARED_KEY:-}" "${WG_DNS:-$DEFAULT_WG_DNS}"
+    write_wg_client_conf "$mode" "$WG_SERVER_ADDRESS" "$WG_SERVER_PORT" "$WG_CLIENT_PRIVATE_KEY" "${WG_CLIENT_ADDRESS:-$(default_wg_addr "$mode")}" "$WG_SERVER_PUBLIC_KEY" "${WG_PRESHARED_KEY:-}" "${WG_DNS:-$DEFAULT_WG_DNS}"
     # Override priority mode
     {
       cat "$CLIENT_CONF"
