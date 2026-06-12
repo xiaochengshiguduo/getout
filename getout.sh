@@ -1549,7 +1549,6 @@ start_wg_server() {
   sleep 2
   if ! systemctl is-active --quiet getout-wg.service; then
     restore_server_or_warn "$snapshot"
-    systemctl restart getout-wg.service 2>/dev/null || true
     fatal "getout-wg.service 启动失败，请查看：journalctl -u getout-wg.service -e"
   fi
   clear_runtime_rollback "$snapshot"
@@ -1729,8 +1728,8 @@ ask_wg_config() {
 
 write_wg_client_conf() {
   local mode="$1" server_addr="$2" server_port="$3" client_private_key="$4" client_address="$5" server_public_key="$6" psk="$7" dns="$8"
-  local ssh_ip ssh_ports v4 v6 runtime_dns priority_mode
-  priority_mode="$(current_priority_mode)"
+  local ssh_ip ssh_ports v4 v6 runtime_dns priority_mode="${9:-}"
+  case "$priority_mode" in v4|v6) ;; *) priority_mode="$(current_priority_mode)" ;; esac
   ssh_ip="$(ssh_remote_ip || true)"
   ssh_ports="$(ssh_listen_ports | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
   v4="$(main_ipv4 || true)"
@@ -2092,14 +2091,7 @@ switch_priority_mode() {
       v4) priority_mode="v6" ;;
       *) priority_mode="v4" ;;
     esac
-    write_wg_client_conf "$mode" "$WG_SERVER_ADDRESS" "$WG_SERVER_PORT" "$WG_CLIENT_PRIVATE_KEY" "${WG_CLIENT_ADDRESS:-$(default_wg_addr "$mode")}" "$WG_SERVER_PUBLIC_KEY" "${WG_PRESHARED_KEY:-}" "${WG_DNS:-$DEFAULT_WG_DNS}"
-    # Override priority mode
-    {
-      cat "$CLIENT_CONF"
-      printf 'PRIORITY_MODE=%s\n' "$(shell_quote "$priority_mode")"
-    } > "${CLIENT_CONF}.tmp"
-    mv "${CLIENT_CONF}.tmp" "$CLIENT_CONF"
-    chmod_private_file "$CLIENT_CONF"
+    write_wg_client_conf "$mode" "$WG_SERVER_ADDRESS" "$WG_SERVER_PORT" "$WG_CLIENT_PRIVATE_KEY" "${WG_CLIENT_ADDRESS:-$(default_wg_addr "$mode")}" "$WG_SERVER_PUBLIC_KEY" "${WG_PRESHARED_KEY:-}" "${WG_DNS:-$DEFAULT_WG_DNS}" "$priority_mode"
     write_wg_config
     write_routes_scripts
     write_wg_service "$mode"

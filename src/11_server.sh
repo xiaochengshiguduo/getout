@@ -367,7 +367,6 @@ start_wg_server() {
   sleep 2
   if ! systemctl is-active --quiet getout-wg.service; then
     restore_server_or_warn "$snapshot"
-    systemctl restart getout-wg.service 2>/dev/null || true
     fatal "getout-wg.service 启动失败，请查看：journalctl -u getout-wg.service -e"
   fi
   clear_runtime_rollback "$snapshot"
