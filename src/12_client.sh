@@ -112,14 +112,16 @@ ask_wg_config() {
   read -rp "请输入入口服务器公钥: " server_public_key
   [ -n "$server_public_key" ] || fatal "服务端公钥不能为空。"
 
-  # 自动生成客户端密钥对
-  client_private_key="$(wg genkey)" || fatal "生成私钥失败，请确认 wireguard-tools 已安装。"
-  local client_pub
-  client_pub="$(printf '%s' "$client_private_key" | wg pubkey)" || fatal "派生公钥失败。"
-  echo ""
-  echo "  客户端私钥: $client_private_key"
-  echo "  客户端公钥: $client_pub（请回填到入口服务器）"
-  echo ""
+  read -rp "请输入客户端私钥 [留空自动生成]: " client_private_key
+  if [ -z "$client_private_key" ]; then
+    client_private_key="$(wg genkey)" || fatal "生成私钥失败，请确认 wireguard-tools 已安装。"
+    local client_pub
+    client_pub="$(printf '%s' "$client_private_key" | wg pubkey)" || fatal "派生公钥失败。"
+    echo ""
+    echo -e "  ${YELLOW}客户端私钥: ${BLUE}${client_private_key}${NC}"
+    echo -e "  ${YELLOW}客户端公钥: ${BLUE}${client_pub}${NC}${YELLOW}（请回填到入口服务器）${NC}"
+    echo ""
+  fi
 
   write_wg_client_conf "$mode" "$server_addr" "$server_port" "$client_private_key" "10.66.66.2/32" "$server_public_key" "" ""
 }

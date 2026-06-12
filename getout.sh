@@ -1331,7 +1331,7 @@ install_server() {
 prompt_wg_server_info() {
   require_root; require_debian; install_deps
   ensure_conf_dir
-  local listen_addr listen_port private_key address peer_public_key allowed_ips
+  local listen_addr listen_port private_key address
 
   read -rp "请输入 WireGuard 监听地址 [默认: :: (双栈)]: " listen_addr
   listen_addr="${listen_addr:-::}"
@@ -1345,11 +1345,6 @@ prompt_wg_server_info() {
   private_key="$(wg genkey)" || fatal "生成私钥失败，请确认 wireguard-tools 已安装。"
   local server_pub
   server_pub="$(printf '%s' "$private_key" | wg pubkey)" || fatal "派生公钥失败。"
-
-  # 自动生成客户端密钥对
-  local peer_private
-  peer_private="$(wg genkey)" || fatal "生成客户端私钥失败。"
-  peer_public_key="$(printf '%s' "$peer_private" | wg pubkey)" || fatal "派生客户端公钥失败。"
 
   read -rp "请输入服务端隧道地址/掩码 [默认: ${DEFAULT_WG_ADDRESS}]: " address
   address="${address:-$DEFAULT_WG_ADDRESS}"
@@ -1365,6 +1360,38 @@ prompt_wg_server_info() {
   read -rp "请输入对端允许的 IP (AllowedIPs) [默认: ${default_allowed}]: " allowed_ips
   allowed_ips="${allowed_ips:-$default_allowed}"
 
+  # 显示入口信息
+  echo ""
+  echo -e "${GREEN}========================================${NC}"
+  echo -e "${GREEN} 入口信息（请复制到出口机器使用）:${NC}"
+  echo -e "${GREEN}========================================${NC}"
+  local ipv4 ipv6
+  ipv4="$(main_ipv4 || true)"
+  ipv6="$(main_ipv6 || true)"
+  if [ -n "$ipv4" ] && [ -n "$ipv6" ]; then
+    echo -e "  地址:"
+    echo -e "    IPv4: ${BLUE}${ipv4}${NC}"
+    echo -e "    IPv6: ${BLUE}${ipv6}${NC}"
+  elif [ -n "$ipv4" ]; then
+    echo -e "  地址: ${BLUE}${ipv4}${NC}"
+  elif [ -n "$ipv6" ]; then
+    echo -e "  地址: ${BLUE}${ipv6}${NC}"
+  else
+    echo -e "  地址: ${YELLOW}<无法检测本机IP>${NC}"
+  fi
+  echo -e "  端口: ${BLUE}${listen_port}${NC}"
+  echo -e "  公钥: ${BLUE}${server_pub}${NC}"
+
+  # 询问客户端公钥
+  local peer_private peer_public_key
+  read -rp "请输入出口客户端公钥 [留空自动生成]: " peer_public_key
+  if [ -z "$peer_public_key" ]; then
+    peer_private="$(wg genkey)" || fatal "生成客户端私钥失败。"
+    peer_public_key="$(printf '%s' "$peer_private" | wg pubkey)" || fatal "派生客户端公钥失败。"
+    echo -e "  ${YELLOW}客户端私钥: ${BLUE}${peer_private}${NC}${YELLOW}（请复制到出口机器）${NC}"
+  fi
+  echo -e "${GREEN}========================================${NC}"
+
   {
     printf 'SERVER_MODE=wireguard\n'
     printf 'LISTEN_ADDRESS=%s\n' "$(shell_quote "$listen_addr")"
@@ -1375,35 +1402,6 @@ prompt_wg_server_info() {
     printf 'ALLOWED_IPS=%s\n' "$(shell_quote "$allowed_ips")"
   } > "$SERVER_CONF"
   chmod_private_file "$SERVER_CONF"
-
-  echo ""
-  echo -e "${GREEN}========================================${NC}"
-  echo -e "${GREEN} 入口信息（请复制到出口机器使用）:${NC}"
-  echo -e "${GREEN}========================================${NC}"
-  echo -e "  公钥: ${BLUE}${server_pub}${NC}"
-  echo -e "  私钥: ${BLUE}${peer_private}${NC}"
-  echo -e "  端口: ${BLUE}${listen_port}${NC}"
-  
-  # 显示服务端公网地址（Endpoint）
-  local ipv4 ipv6
-  ipv4="$(main_ipv4 || true)"
-  ipv6="$(main_ipv6 || true)"
-  if [ -n "$ipv4" ] && [ -n "$ipv6" ]; then
-    echo -e "  地址 (Endpoint):"
-    echo -e "    IPv4: ${BLUE}${ipv4}${NC}"
-    echo -e "    IPv6: ${BLUE}${ipv6}${NC}"
-  elif [ -n "$ipv4" ]; then
-    echo -e "  地址 (Endpoint): ${BLUE}${ipv4}${NC}"
-  elif [ -n "$ipv6" ]; then
-    echo -e "  地址 (Endpoint): ${BLUE}${ipv6}${NC}"
-  else
-    echo -e "  地址 (Endpoint): ${YELLOW}<无法检测本机IP>${NC}"
-  fi
-  
-  # 显示客户端隧道地址
-  local client_addr="${address%.*}.2/32"
-  echo -e "  隧道地址: ${BLUE}${client_addr}${NC}"
-  echo -e "${GREEN}========================================${NC}"
 }
 
 write_wg_server_service() {
@@ -1654,14 +1652,16 @@ ask_wg_config() {
   read -rp "请输入入口服务器公钥: " server_public_key
   [ -n "$server_public_key" ] || fatal "服务端公钥不能为空。"
 
-  # 自动生成客户端密钥对
-  client_private_key="$(wg genkey)" || fatal "生成私钥失败，请确认 wireguard-tools 已安装。"
-  local client_pub
-  client_pub="$(printf '%s' "$client_private_key" | wg pubkey)" || fatal "派生公钥失败。"
-  echo ""
-  echo "  客户端私钥: $client_private_key"
-  echo "  客户端公钥: $client_pub（请回填到入口服务器）"
-  echo ""
+  read -rp "请输入客户端私钥 [留空自动生成]: " client_private_key
+  if [ -z "$client_private_key" ]; then
+    client_private_key="$(wg genkey)" || fatal "生成私钥失败，请确认 wireguard-tools 已安装。"
+    local client_pub
+    client_pub="$(printf '%s' "$client_private_key" | wg pubkey)" || fatal "派生公钥失败。"
+    echo ""
+    echo -e "  ${YELLOW}客户端私钥: ${BLUE}${client_private_key}${NC}"
+    echo -e "  ${YELLOW}客户端公钥: ${BLUE}${client_pub}${NC}${YELLOW}（请回填到入口服务器）${NC}"
+    echo ""
+  fi
 
   write_wg_client_conf "$mode" "$server_addr" "$server_port" "$client_private_key" "10.66.66.2/32" "$server_public_key" "" ""
 }
