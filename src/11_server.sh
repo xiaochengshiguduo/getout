@@ -16,7 +16,7 @@ current_mode() {
 
 server_active() { service_active getout-gost.service; }
 tun_active() { service_active getout-tun.service; }
-wg_server_active() { service_active getout-wg.service; }
+wg_server_active() { local mode; mode="$(current_mode)"; service_active getout-wg.service && [ "$mode" = "wg-server" ]; }
 wg_client_active() {
   local mode="$(current_mode)"
   service_active getout-wg.service && [[ "$mode" =~ ^wg- ]]
