@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.0.1
+
+- 修复测试套件：错误消息匹配修正（`入口模式启动失败` → `入口启动失败`），菜单编号测试改为通用匹配以适应菜单扩展。
+- `write_wg_client_conf` 增加第 9 个可选参数 `priority_mode`，与 `write_client_conf` 设计对齐；`switch_priority_mode` WG 分支去掉重复 `PRIORITY_MODE` 行追加逻辑。
+- `start_wg_server` 移除回滚后无意义的 `systemctl restart`（死代码）。
+
+## 2.0.0
+
+- 新增 WireGuard 协议支持，入口模式和出口模式均可选择 SOCKS5 或 WireGuard。
+- 入口 WireGuard 模式：交互式输入密钥对、端口、对端信息，自动写入 WireGuard 配置和 systemd 服务。
+- 出口 WireGuard 模式：支持 V4 优先和 V4+V6 双栈，路由保护、DNS 策略与 SOCKS5 模式完全一致。
+- 管理面板、restart/uninstall/status/doctor 全面适配 WireGuard 实例。
+- CLI 新增子命令 `wg-server`、`wg-v4`、`wg-dual`。
+- 菜单交互标签统一：入口为"SOCKS5 模式"/"WireGuard 模式"，出口为"s5-V4"/"s5-V4+V6"/"WG-V4"/"WG-V4+V6"。
+
 ## 1.0.0
 
 - 调整交互管理面板顺序：`查看状态` 移到第 7 项，`重启 getout` 移到第 8 项。
