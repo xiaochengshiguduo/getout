@@ -203,6 +203,7 @@ status() {
         echo "地址: ${ipv6}"
       fi
       echo "端口: ${LISTEN_PORT:-}"
+      echo "私钥: ${PRIVATE_KEY:-}"
       local server_pub="$(printf '%s' "${PRIVATE_KEY:-}" | wg pubkey 2>/dev/null || echo "<无法推导>")"
       echo "公钥: ${server_pub}"
     else
@@ -249,6 +250,7 @@ status() {
         echo "地址: ${addr}"
       fi
       echo "端口: ${port}"
+      echo "私钥: ${WG_CLIENT_PRIVATE_KEY:-}"
       echo "公钥: ${WG_SERVER_PUBLIC_KEY:-}"
     else
       echo "类型: SOCKS5"
