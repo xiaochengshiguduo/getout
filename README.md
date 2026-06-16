@@ -215,7 +215,7 @@ V6 优先模式会：
 - 启动或重启出口前会显示 SSH 回包保护检测结果，检测不足时会给出断联风险警告；
 - 保护上游 SOCKS5 和运行期 DNS 路由，避免代理回环；
 - 使用 nftables/conntrack（可选）保护外部主动连入本机的连接回包，避免影响 sing-box、xray、hysteria、tuic、nginx 等本机入站服务；
-- tun2socks 出口启动前会检查 nftables 入站回包保护是否可用，如果 nftables 可用则启用保护，不可用则跳过（nftables 为可选依赖）。
+- 出口启动前（tun2socks 和 WireGuard 均会）检查 nftables 入站回包保护是否可用，如果 nftables 可用则启用保护，不可用则跳过（nftables 为可选依赖）。
 
 `ping`/ICMP 不经过 SOCKS 出口代理（tun2socks 模式），`ping` 不通不代表 TCP/UDP 出口不可用。使用 WireGuard 出口时 ICMP 正常工作。建议使用 `curl` 或应用自身连接测试确认出口状态。
 
