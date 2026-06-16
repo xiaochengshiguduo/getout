@@ -294,7 +294,7 @@ doctor_check() {
   fi
   [ -c /dev/net/tun ] && check_ok "/dev/net/tun 可用" || check_fail "未检测到 /dev/net/tun。"
   command -v systemctl >/dev/null 2>&1 && check_ok "systemd/systemctl 可用" || check_fail "未找到 systemctl。"
-  command -v nft >/dev/null 2>&1 && check_ok "nftables 可用" || check_warn "未找到 nft（可选，入站连接回包保护将跳过）。"
+  command -v nft >/dev/null 2>&1 && check_ok "nftables 可用" || check_warn "未找到 nft（可选，入站连接回包保护将跳过；出口启动时会提示安装）。"
   command -v ip >/dev/null 2>&1 && check_ok "iproute2 可用" || check_fail "未找到 ip 命令。"
   command -v curl >/dev/null 2>&1 && check_ok "curl 可用" || check_warn "未找到 curl，下载/状态测试可能受影响。"
   command -v sha256sum >/dev/null 2>&1 && check_ok "sha256sum 可用" || check_warn "缺少 sha256sum，无法做更新完整性校验。"

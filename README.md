@@ -28,7 +28,7 @@
 - `/dev/net/tun` 可用
 - systemd
 - `wireguard-tools`（WireGuard 模式需要，脚本会自动安装）
-- `nftables`（可选，用于入站连接回包保护；没有则跳过）
+- `nftables`（用于入站连接回包保护；未安装时出口启动会提示是否安装）
 - 支持 IPv4、IPv6 或双栈 VPS
 
 ## 快速使用
@@ -215,7 +215,7 @@ V6 优先模式会：
 - 启动或重启出口前会显示 SSH 回包保护检测结果，检测不足时会给出断联风险警告；
 - 保护上游 SOCKS5 和运行期 DNS 路由，避免代理回环；
 - 使用 nftables/conntrack（可选）保护外部主动连入本机的连接回包，避免影响 sing-box、xray、hysteria、tuic、nginx 等本机入站服务；
-- 出口启动前（tun2socks 和 WireGuard 均会）检查 nftables 入站回包保护是否可用，如果 nftables 可用则启用保护，不可用则跳过（nftables 为可选依赖）。
+- 出口启动前（tun2socks 和 WireGuard 均会）检查 nftables 入站回包保护是否可用，如果未安装会交互提示是否安装（回车默认安装），用户拒绝则跳过。
 
 `ping`/ICMP 不经过 SOCKS 出口代理（tun2socks 模式），`ping` 不通不代表 TCP/UDP 出口不可用。使用 WireGuard 出口时 ICMP 正常工作。建议使用 `curl` 或应用自身连接测试确认出口状态。
 
@@ -314,7 +314,7 @@ getout check
 
 - root 权限、Debian、systemd、TUN、iproute2、curl、sha256sum；
 - `wireguard-tools`（`wg`/`wg-quick` 命令）是否可用；
-- `nftables`（可选，有则检查可用性）；
+- `nftables`（入站回包保护，未安装时会提示安装）；
 - `/etc/getout` 和配置文件权限；
 - 入口/出口二进制和 systemd unit 是否存在；
 - 生成的路由脚本语法；
@@ -375,7 +375,7 @@ tests/run.sh
 - 脚本会在常规下载失败后临时修改 `/etc/resolv.conf` 使用 DNS64，DNS64 下载结束后恢复。
 - 出口运行时会临时修改 `/etc/resolv.conf` 和 `/etc/gai.conf`，停止或卸载时恢复。
 - `/etc/resolv.conf` 和 `/etc/gai.conf` 的恢复依赖首次接管前保存的原始备份和 checksum；如果备份缺失或运行期间被外部修改，脚本会警告并避免盲目覆盖当前内容。
-- 出口启动前会检查 nftables 是否可用，可用则创建临时 nftables 表做入站回包保护，不可用则跳过（nftables 为可选依赖）。
+- 出口启动前会检查 nftables 是否可用，未安装时交互提示是否安装；可用则创建临时 nftables 表做入站回包保护。
 - `/etc/getout` 会设置为私有目录，配置文件包含代理账号密码。
 - 脚本在读取配置文件前会校验配置由 root 拥有，且 group/other 不可写。
 - SOCKS5 入口必须设置用户名密码；用户名和密码不能包含空白字符或 URL 保留字符。
@@ -388,7 +388,7 @@ tests/run.sh
 - 交互录入和 `status` 会明文显示入口/出口密码，这是为了在可信终端快速核对配置；不要把状态页截图或日志发到公开场所。
 - `ping`/ICMP 不经过 SOCKS 出口代理（tun2socks 模式），排障时请优先使用 `curl` 或真实应用连接测试。WireGuard 出口下 ICMP 正常工作。
 - `/etc/resolv.conf` 若由 systemd-resolved、NetworkManager、VPS 面板等外部组件并发管理，getout 会尽量保留外部修改并报警；遇到 DNS 异常时先检查 `/etc/getout/resolv.conf.*` 和当前 `/etc/resolv.conf`。
-- 出口依赖 TUN、conntrack/fib 规则能力；nftables 为可选依赖（有则启用入站回包保护，无则跳过）。如果 `getout doctor` 或启动 preflight 失败，请先按错误提示处理内核/系统能力问题。
+- 出口依赖 TUN、conntrack/fib 规则能力；nftables 用于入站回包保护，未安装时出口启动会提示安装。如果 `getout doctor` 或启动 preflight 失败，请先按错误提示处理内核/系统能力问题。
 - 更新后如果服务正在运行，建议执行 `getout restart`，让 systemd unit 和路由脚本刷新到最新版本。
 - 当前 SHA256 是完整性校验，不是强签名；如果需要更强供应链保护，请使用可信网络、固定 SHA256，或后续接入 GPG/minisign 签名发布。
 - `gost` 和 `hev-socks5-tunnel` 第三方二进制当前做固定 SHA256 完整性校验，但仍不是 GPG/minisign 强签名；高安全场景请自行固定可信来源或接入强签名验证。

@@ -435,6 +435,26 @@ ensure_tun() {
   [ -c /dev/net/tun ] || fatal "未检测到 /dev/net/tun，请先在 VPS 控制面板开启 TUN。"
 }
 
+# 确保 nftables 可用；交互模式下询问是否安装，非交互模式下自动安装。
+# 返回 0 = 可用，1 = 用户拒绝或安装失败。
+ensure_nftables() {
+  command -v nft >/dev/null 2>&1 && return 0
+  if [ -t 0 ] && [ -t 1 ]; then
+    echo -n "未找到 nft，nftables 用于保护外部入站连接回包（可选）。是否安装？[Y/n] " >&2
+    local reply
+    read -r reply
+    if [[ "$reply" =~ ^[Nn]$ ]]; then
+      info "跳过 nftables 安装，外部入站回包保护将不可用。"
+      return 1
+    fi
+  fi
+  info "正在安装 nftables..."
+  apt-get update -y >/dev/null 2>&1
+  apt-get install -y nftables || { err "nftables 安装失败。"; return 1; }
+  command -v nft >/dev/null 2>&1 || { err "nftables 安装后仍未找到 nft 命令。"; return 1; }
+  success "nftables 已安装。"
+}
+
 ensure_wgmod() {
   if ! lsmod 2>/dev/null | grep -q '^wireguard\b'; then
     modprobe wireguard 2>/dev/null || fatal "无法加载 WireGuard 内核模块 (wireguard.ko)，请确认内核版本 >= 5.6 或已安装 wireguard-dkms。"
@@ -720,7 +740,7 @@ preflight_tun_runtime() {
   [ -x "$ROUTES_DOWN" ] || { err "routes-down.sh 不可执行：$ROUTES_DOWN"; return 1; }
   bash -n "$ROUTES_UP" || { err "routes-up.sh 语法校验失败。"; return 1; }
   bash -n "$ROUTES_DOWN" || { err "routes-down.sh 语法校验失败。"; return 1; }
-  if command -v nft >/dev/null 2>&1; then
+  if ensure_nftables; then
     nft delete table inet getout_preflight 2>/dev/null || true
     nft add table inet getout_preflight >/dev/null 2>&1 || { err "nftables 预检失败：无法创建 inet table。"; return 1; }
     nft add chain inet getout_preflight prerouting '{ type filter hook prerouting priority -150; policy accept; }' >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败：当前内核不支持所需 prerouting 规则。"; return 1; }
@@ -728,8 +748,6 @@ preflight_tun_runtime() {
     nft add rule inet getout_preflight prerouting iifname != "$TUN_NAME" ct state new fib daddr type local ct mark set "$BYPASS_MARK_ID" >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败：当前内核不支持 conntrack/fib 标记规则。"; return 1; }
     nft add rule inet getout_preflight output ct mark "$BYPASS_MARK_ID" meta mark set "$BYPASS_MARK_ID" >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败：当前内核不支持 ct mark 输出规则。"; return 1; }
     nft delete table inet getout_preflight 2>/dev/null || true
-  else
-    info "未找到 nft，跳过 nftables 预检（可选功能）。"
   fi
 }
 
@@ -800,7 +818,7 @@ preflight_wg_runtime() {
   [ -x "$ROUTES_DOWN" ] || { err "routes-down.sh 不可执行：$ROUTES_DOWN"; return 1; }
   bash -n "$ROUTES_UP" || { err "routes-up.sh 语法校验失败。"; return 1; }
   bash -n "$ROUTES_DOWN" || { err "routes-down.sh 语法校验失败。"; return 1; }
-  if command -v nft >/dev/null 2>&1; then
+  if ensure_nftables; then
     nft delete table inet getout_preflight 2>/dev/null || true
     nft add table inet getout_preflight >/dev/null 2>&1 || { err "nftables 预检失败：无法创建 inet table。"; return 1; }
     nft add chain inet getout_preflight prerouting '{ type filter hook prerouting priority -150; policy accept; }' >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败。"; return 1; }
@@ -808,8 +826,6 @@ preflight_wg_runtime() {
     nft add rule inet getout_preflight prerouting iifname != "$TUN_NAME" ct state new fib daddr type local ct mark set "$BYPASS_MARK_ID" >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败。"; return 1; }
     nft add rule inet getout_preflight output ct mark "$BYPASS_MARK_ID" meta mark set "$BYPASS_MARK_ID" >/dev/null 2>&1 || { nft delete table inet getout_preflight 2>/dev/null || true; err "nftables 预检失败。"; return 1; }
     nft delete table inet getout_preflight 2>/dev/null || true
-  else
-    info "未找到 nft，跳过 nftables 预检（可选功能）。"
   fi
 }
 
@@ -945,7 +961,7 @@ add_ssh_port_rules() {
   done
 }
 add_inbound_protect() {
-  command -v nft >/dev/null 2>&1 || { echo "[信息] 未找到 nft，跳过外部入站连接回包保护（可选功能）。" >&2; return 0; }
+  ensure_nftables || return 0
   nft delete table inet "$NFT_TABLE" 2>/dev/null || true
   nft add table inet "$NFT_TABLE"
   nft add chain inet "$NFT_TABLE" prerouting '{ type filter hook prerouting priority -150; policy accept; }'
@@ -2439,7 +2455,7 @@ doctor_check() {
   fi
   [ -c /dev/net/tun ] && check_ok "/dev/net/tun 可用" || check_fail "未检测到 /dev/net/tun。"
   command -v systemctl >/dev/null 2>&1 && check_ok "systemd/systemctl 可用" || check_fail "未找到 systemctl。"
-  command -v nft >/dev/null 2>&1 && check_ok "nftables 可用" || check_warn "未找到 nft（可选，入站连接回包保护将跳过）。"
+  command -v nft >/dev/null 2>&1 && check_ok "nftables 可用" || check_warn "未找到 nft（可选，入站连接回包保护将跳过；出口启动时会提示安装）。"
   command -v ip >/dev/null 2>&1 && check_ok "iproute2 可用" || check_fail "未找到 ip 命令。"
   command -v curl >/dev/null 2>&1 && check_ok "curl 可用" || check_warn "未找到 curl，下载/状态测试可能受影响。"
   command -v sha256sum >/dev/null 2>&1 && check_ok "sha256sum 可用" || check_warn "缺少 sha256sum，无法做更新完整性校验。"

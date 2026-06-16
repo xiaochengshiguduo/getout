@@ -31,6 +31,26 @@ ensure_tun() {
   [ -c /dev/net/tun ] || fatal "未检测到 /dev/net/tun，请先在 VPS 控制面板开启 TUN。"
 }
 
+# 确保 nftables 可用；交互模式下询问是否安装，非交互模式下自动安装。
+# 返回 0 = 可用，1 = 用户拒绝或安装失败。
+ensure_nftables() {
+  command -v nft >/dev/null 2>&1 && return 0
+  if [ -t 0 ] && [ -t 1 ]; then
+    echo -n "未找到 nft，nftables 用于保护外部入站连接回包（可选）。是否安装？[Y/n] " >&2
+    local reply
+    read -r reply
+    if [[ "$reply" =~ ^[Nn]$ ]]; then
+      info "跳过 nftables 安装，外部入站回包保护将不可用。"
+      return 1
+    fi
+  fi
+  info "正在安装 nftables..."
+  apt-get update -y >/dev/null 2>&1
+  apt-get install -y nftables || { err "nftables 安装失败。"; return 1; }
+  command -v nft >/dev/null 2>&1 || { err "nftables 安装后仍未找到 nft 命令。"; return 1; }
+  success "nftables 已安装。"
+}
+
 ensure_wgmod() {
   if ! lsmod 2>/dev/null | grep -q '^wireguard\b'; then
     modprobe wireguard 2>/dev/null || fatal "无法加载 WireGuard 内核模块 (wireguard.ko)，请确认内核版本 >= 5.6 或已安装 wireguard-dkms。"
