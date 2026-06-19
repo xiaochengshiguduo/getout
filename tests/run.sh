@@ -332,6 +332,34 @@ run_binary_checksum_verification() {
   pass 'third-party binary checksum verification accepts match and rejects mismatch'
 }
 
+run_client_config_writes_common_runtime_fields() {
+  local t="$TMP_ROOT/client-conf" lib
+  lib="$t/lib.sh"
+  mkdir -p "$t/conf"
+  make_lib "$lib"
+  (
+    set -euo pipefail
+    # shellcheck disable=SC1090
+    . "$lib"
+    CONF_DIR="$t/conf"
+    CLIENT_CONF="$CONF_DIR/client.conf"
+    ssh_remote_ip() { echo 198.51.100.2; }
+    ssh_listen_ports() { echo 22; }
+    main_ipv4() { echo 203.0.113.1; }
+    main_ipv6() { echo 2001:db8::1; }
+    write_client_conf v4 socks.example 1080 user pass v4
+    grep -q '^SSH_REMOTE_IP=198.51.100.2$' "$CLIENT_CONF"
+    grep -q '^TUN_NAME=tun0$' "$CLIENT_CONF"
+    grep -q '^PRIORITY_MODE=v4$' "$CLIENT_CONF"
+    write_wg_client_conf wg-dual wg.example 62233 client-key '10.66.66.2/32, fd86:ea04:1115::2/128' server-pub '' '' v6
+    grep -q '^SSH_REMOTE_IP=198.51.100.2$' "$CLIENT_CONF"
+    grep -q '^IFACE=getout-wg0$' "$CLIENT_CONF"
+    grep -q '^TUN_NAME=getout-wg0$' "$CLIENT_CONF"
+    grep -q '^PRIORITY_MODE=v6$' "$CLIENT_CONF"
+  )
+  pass 'client configs share common runtime fields'
+}
+
 run_wg_server_status_prints_peer_credentials() {
   local t="$TMP_ROOT/wg-status" lib out
   lib="$t/lib.sh"
@@ -386,4 +414,5 @@ run_menu_order_matches_readme
 run_checksum_file_matches_script
 run_checksum_verification
 run_binary_checksum_verification
+run_client_config_writes_common_runtime_fields
 run_wg_server_status_prints_peer_credentials

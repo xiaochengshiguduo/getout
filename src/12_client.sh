@@ -34,14 +34,32 @@ runtime_dns_servers_text() {
   esac
 }
 
-write_client_conf() {
-  local mode="$1" address="$2" port="$3" username="$4" password="$5" priority_mode="${6:-}" ssh_ip ssh_ports v4 v6 runtime_dns
+write_runtime_common_conf() {
+  local priority_mode="${1:-}" tun_name="${2:-$TUN_NAME}" iface="${3:-}"
+  local ssh_ip ssh_ports v4 v6 runtime_dns
   case "$priority_mode" in v4|v6) ;; *) priority_mode="$(current_priority_mode)" ;; esac
   ssh_ip="$(ssh_remote_ip || true)"
   ssh_ports="$(ssh_listen_ports | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
   v4="$(main_ipv4 || true)"
   v6="$(main_ipv6 || true)"
   runtime_dns="$(runtime_dns_servers_text "$priority_mode")"
+  printf 'SSH_REMOTE_IP=%s\n' "$(shell_quote "$ssh_ip")"
+  printf 'SSH_PORTS=%s\n' "$(shell_quote "$ssh_ports")"
+  printf 'MAIN_IPV4=%s\n' "$(shell_quote "$v4")"
+  printf 'MAIN_IPV6=%s\n' "$(shell_quote "$v6")"
+  printf 'TABLE_ID=%s\n' "$(shell_quote "$TABLE_ID")"
+  printf 'MARK_ID=%s\n' "$(shell_quote "$MARK_ID")"
+  printf 'BYPASS_MARK_ID=%s\n' "$(shell_quote "$BYPASS_MARK_ID")"
+  printf 'NFT_TABLE=%s\n' "$(shell_quote "$NFT_TABLE")"
+  [ -n "$iface" ] && printf 'IFACE=%s\n' "$(shell_quote "$iface")"
+  printf 'TUN_NAME=%s\n' "$(shell_quote "$tun_name")"
+  printf 'PRIORITY_MODE=%s\n' "$(shell_quote "$priority_mode")"
+  printf 'RUNTIME_DNS_SERVERS=%s\n' "$(shell_quote "$runtime_dns")"
+  printf 'RUNTIME_DNS_ENABLE=1\n'
+}
+
+write_client_conf() {
+  local mode="$1" address="$2" port="$3" username="$4" password="$5" priority_mode="${6:-}"
   ensure_conf_dir
   {
     printf 'MODE=%s\n' "$(shell_quote "$mode")"
@@ -49,18 +67,7 @@ write_client_conf() {
     printf 'SOCKS_PORT=%s\n' "$(shell_quote "$port")"
     printf 'SOCKS_USERNAME=%s\n' "$(shell_quote "$username")"
     printf 'SOCKS_PASSWORD=%s\n' "$(shell_quote "$password")"
-    printf 'SSH_REMOTE_IP=%s\n' "$(shell_quote "$ssh_ip")"
-    printf 'SSH_PORTS=%s\n' "$(shell_quote "$ssh_ports")"
-    printf 'MAIN_IPV4=%s\n' "$(shell_quote "$v4")"
-    printf 'MAIN_IPV6=%s\n' "$(shell_quote "$v6")"
-    printf 'TABLE_ID=%s\n' "$(shell_quote "$TABLE_ID")"
-    printf 'MARK_ID=%s\n' "$(shell_quote "$MARK_ID")"
-    printf 'BYPASS_MARK_ID=%s\n' "$(shell_quote "$BYPASS_MARK_ID")"
-    printf 'NFT_TABLE=%s\n' "$(shell_quote "$NFT_TABLE")"
-    printf 'TUN_NAME=%s\n' "$(shell_quote "$TUN_NAME")"
-    printf 'PRIORITY_MODE=%s\n' "$(shell_quote "$priority_mode")"
-    printf 'RUNTIME_DNS_SERVERS=%s\n' "$(shell_quote "$runtime_dns")"
-    printf 'RUNTIME_DNS_ENABLE=1\n'
+    write_runtime_common_conf "$priority_mode"
   } > "$CLIENT_CONF"
   chmod_private_file "$CLIENT_CONF"
 }
@@ -129,13 +136,7 @@ ask_wg_config() {
 
 write_wg_client_conf() {
   local mode="$1" server_addr="$2" server_port="$3" client_private_key="$4" client_address="$5" server_public_key="$6" psk="$7" dns="$8"
-  local ssh_ip ssh_ports v4 v6 runtime_dns priority_mode="${9:-}"
-  case "$priority_mode" in v4|v6) ;; *) priority_mode="$(current_priority_mode)" ;; esac
-  ssh_ip="$(ssh_remote_ip || true)"
-  ssh_ports="$(ssh_listen_ports | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
-  v4="$(main_ipv4 || true)"
-  v6="$(main_ipv6 || true)"
-  runtime_dns="$(runtime_dns_servers_text "$priority_mode")"
+  local priority_mode="${9:-}" iface="getout-${WG_IFACE}"
   ensure_conf_dir
   {
     printf 'MODE=%s\n' "$(shell_quote "$mode")"
@@ -148,19 +149,7 @@ write_wg_client_conf() {
     printf 'WG_PRESHARED_KEY=%s\n' "$(shell_quote "$psk")"
     printf 'WG_DNS=%s\n' "$(shell_quote "$dns")"
     printf 'SOCKS_ADDRESS=%s\n' "$(shell_quote "$server_addr")"
-    printf 'SSH_REMOTE_IP=%s\n' "$(shell_quote "$ssh_ip")"
-    printf 'SSH_PORTS=%s\n' "$(shell_quote "$ssh_ports")"
-    printf 'MAIN_IPV4=%s\n' "$(shell_quote "$v4")"
-    printf 'MAIN_IPV6=%s\n' "$(shell_quote "$v6")"
-    printf 'TABLE_ID=%s\n' "$(shell_quote "$TABLE_ID")"
-    printf 'MARK_ID=%s\n' "$(shell_quote "$MARK_ID")"
-    printf 'BYPASS_MARK_ID=%s\n' "$(shell_quote "$BYPASS_MARK_ID")"
-    printf 'NFT_TABLE=%s\n' "$(shell_quote "$NFT_TABLE")"
-    printf 'IFACE=%s\n' "$(shell_quote "getout-${WG_IFACE}")"
-    printf 'TUN_NAME=%s\n' "$(shell_quote "getout-${WG_IFACE}")"
-    printf 'PRIORITY_MODE=%s\n' "$(shell_quote "$priority_mode")"
-    printf 'RUNTIME_DNS_SERVERS=%s\n' "$(shell_quote "$runtime_dns")"
-    printf 'RUNTIME_DNS_ENABLE=1\n'
+    write_runtime_common_conf "$priority_mode" "$iface" "$iface"
   } > "$CLIENT_CONF"
   chmod_private_file "$CLIENT_CONF"
 }
