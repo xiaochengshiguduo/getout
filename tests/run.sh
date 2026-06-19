@@ -271,6 +271,10 @@ run_menu_order_matches_readme() {
   [ -n "$status_line" ] && [ -n "$restart_line" ] && [ -n "$update_line" ] && [ -n "$uninstall_line" ] && [ -n "$exit_line" ]
   [ "$status_line" -lt "$restart_line" ] && [ "$restart_line" -lt "$update_line" ] && [ "$update_line" -lt "$uninstall_line" ] && [ "$uninstall_line" -lt "$exit_line" ]
   grep -q '请选择 \[1-' "$SCRIPT"
+  grep -q '请选择 \[1/2\]' "$SCRIPT"
+  grep -q 'echo "  1\. SOCKS5 模式"' "$SCRIPT"
+  grep -q 'echo "  2\. WireGuard 模式"' "$SCRIPT"
+  ! grep -q '请选择 \[a/b\]' "$SCRIPT"
   ! grep -q 'echo "9\.环境诊断"' "$SCRIPT"
   pass 'menu order matches documented release menu'
 }

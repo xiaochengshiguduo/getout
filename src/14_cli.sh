@@ -47,12 +47,12 @@ menu() {
     2) if wg_server_active; then stop_wg_server; else start_wg_server; fi ;;
     3)
       echo -e "${BLUE}修改入口:${NC}"
-      echo "  a. SOCKS5 模式"
-      echo "  b. WireGuard 模式"
-      read -rp "请选择 [a/b]: " entry_choice
+      echo "  1. SOCKS5 模式"
+      echo "  2. WireGuard 模式"
+      read -rp "请选择 [1/2]: " entry_choice
       case "$entry_choice" in
-        a) configure_server ;;
-        b) configure_wg_server ;;
+        1) configure_server ;;
+        2) configure_wg_server ;;
         *) fatal "无效选项。" ;;
       esac
       ;;
