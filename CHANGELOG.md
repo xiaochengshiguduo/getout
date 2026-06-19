@@ -2,6 +2,8 @@
 
 ## 2.0.1
 
+- 入口 WireGuard 启动流程移除即时入口信息打印，只保留最终 `getout status` 输出，避免重复显示。
+- 入口 WireGuard 配置保存客户端私钥，`getout status` 现在输出出口机可直接使用的客户端私钥和服务端公钥。
 - 修复测试套件：错误消息匹配修正（`入口模式启动失败` → `入口启动失败`），菜单编号测试改为通用匹配以适应菜单扩展。
 - `write_wg_client_conf` 增加第 9 个可选参数 `priority_mode`，与 `write_client_conf` 设计对齐；`switch_priority_mode` WG 分支去掉重复 `PRIORITY_MODE` 行追加逻辑。
 - `start_wg_server` 移除回滚后无意义的 `systemctl restart`（死代码）。
