@@ -328,6 +328,47 @@ run_binary_checksum_verification() {
   pass 'third-party binary checksum verification accepts match and rejects mismatch'
 }
 
+run_wg_server_status_prints_peer_credentials() {
+  local t="$TMP_ROOT/wg-status" lib out
+  lib="$t/lib.sh"
+  mkdir -p "$t/conf"
+  make_lib "$lib"
+  cat > "$t/conf/server.conf" <<'CONF'
+SERVER_MODE=wireguard
+LISTEN_PORT=62233
+PRIVATE_KEY=server-private
+PEER_PRIVATE_KEY=client-private
+PEER_PUBLIC_KEY=client-public
+CONF
+  chmod 600 "$t/conf/server.conf"
+  out="$( (
+    set -euo pipefail
+    # shellcheck disable=SC1090
+    . "$lib"
+    CONF_DIR="$t/conf"
+    SERVER_CONF="$CONF_DIR/server.conf"
+    CLIENT_CONF="$CONF_DIR/client.conf"
+    MODE_FILE="$CONF_DIR/mode"
+    SCRIPT_VERSION=test
+    CYAN= NC=
+    current_mode() { echo wg-server; }
+    server_active() { return 1; }
+    tun_active() { return 1; }
+    wg_server_active() { return 1; }
+    wg_client_active() { return 1; }
+    service_enabled_text() { echo disabled; }
+    main_ipv4() { echo 203.0.113.1; }
+    main_ipv6() { return 1; }
+    wg() { cat >/dev/null; echo server-public; }
+    curl() { echo test-ip; }
+    status
+  ) 2>&1)"
+  grep -q '私钥: client-private' <<<"$out"
+  grep -q '公钥: server-public' <<<"$out"
+  ! grep -q '私钥: server-private' <<<"$out"
+  pass 'WireGuard entry status prints peer private key and server public key'
+}
+
 run_build_output_is_current
 run_bash_syntax
 run_route_script_syntax
@@ -341,3 +382,4 @@ run_menu_order_matches_readme
 run_checksum_file_matches_script
 run_checksum_verification
 run_binary_checksum_verification
+run_wg_server_status_prints_peer_credentials

@@ -219,34 +219,11 @@ prompt_wg_server_info() {
     printf 'LISTEN_PORT=%s\n' "$(shell_quote "$listen_port")"
     printf 'PRIVATE_KEY=%s\n' "$(shell_quote "$private_key")"
     printf 'ADDRESS=%s\n' "$(shell_quote "$full_address")"
+    printf 'PEER_PRIVATE_KEY=%s\n' "$(shell_quote "$peer_private")"
     printf 'PEER_PUBLIC_KEY=%s\n' "$(shell_quote "$peer_public_key")"
     printf 'ALLOWED_IPS=%s\n' "$(shell_quote "$allowed_ips")"
   } > "$SERVER_CONF"
   chmod_private_file "$SERVER_CONF"
-
-  # 显示入口信息
-  echo ""
-  echo "========================================"
-  echo " 入口信息"
-  echo "========================================"
-  local ipv4 ipv6
-  ipv4="$(main_ipv4 || true)"
-  ipv6="$(main_ipv6 || true)"
-  if [ -n "$ipv4" ] && [ -n "$ipv6" ]; then
-    echo "  地址:"
-    echo "    IPv4: ${ipv4}"
-    echo "    IPv6: ${ipv6}"
-  elif [ -n "$ipv4" ]; then
-    echo "  地址: ${ipv4}"
-  elif [ -n "$ipv6" ]; then
-    echo "  地址: ${ipv6}"
-  else
-    echo -e "  地址: ${YELLOW}<无法检测本机IP>${NC}"
-  fi
-  echo "  端口: ${listen_port}"
-  echo "  私钥: ${peer_private}"
-  echo "  公钥: ${server_pub}"
-  echo "========================================"
 }
 
 write_wg_server_service() {

@@ -203,7 +203,11 @@ status() {
         echo "地址: ${ipv6}"
       fi
       echo "端口: ${LISTEN_PORT:-}"
-      echo "私钥: ${PRIVATE_KEY:-}"
+      if [ -n "${PEER_PRIVATE_KEY:-}" ]; then
+        echo "私钥: ${PEER_PRIVATE_KEY}"
+      else
+        echo "私钥: <旧配置未保存客户端私钥，请重新配置入口>"
+      fi
       local server_pub="$(printf '%s' "${PRIVATE_KEY:-}" | wg pubkey 2>/dev/null || echo "<无法推导>")"
       echo "公钥: ${server_pub}"
     else
