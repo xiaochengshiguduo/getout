@@ -161,9 +161,3 @@ download_hev() {
   rm -f "$tmp"
   trap - RETURN
 }
-
-download_wg_service() {
-  # WireGuard 使用系统自带的 wg-quick@.service，无需下载额外二进制。
-  # 此函数仅用于确认 wg-quick 命令可用。
-  command -v wg-quick >/dev/null 2>&1 || fatal "未找到 wg-quick 命令，请先安装 wireguard-tools：apt install wireguard-tools"
-}

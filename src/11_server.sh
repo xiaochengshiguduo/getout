@@ -175,10 +175,6 @@ configure_server() {
   fi
 }
 
-install_server() {
-  start_server
-}
-
 # --- WireGuard 模式 ---
 
 prompt_wg_server_info() {

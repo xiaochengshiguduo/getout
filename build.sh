@@ -12,7 +12,6 @@ modules=(
   src/02_logging.sh
   src/03_update.sh
   src/04_config.sh
-  src/05_resolver.sh
   src/06_rollback.sh
   src/07_deps_downloads.sh
   src/08_helpers.sh

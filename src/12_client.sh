@@ -535,12 +535,3 @@ switch_priority_mode() {
   status
 }
 
-install_tun() {
-  local transport="${2:-socks5}"
-  if [ "$transport" = "wireguard" ]; then
-    start_wg_client "$1"
-  else
-    start_client "$1"
-  fi
-}
-

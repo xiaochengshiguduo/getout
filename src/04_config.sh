@@ -45,20 +45,3 @@ write_file_meta() {
   chmod_private_file "$meta"
 }
 
-backup_path_preserve_symlink() {
-  local path="$1" backup="$2" meta="$3" target_backup="${4:-}"
-  [ -f "$backup" ] && return 0
-  write_file_meta "$path" "$meta" "$backup"
-  if [ -L "$path" ]; then
-    cp -a "$path" "$backup" 2>/dev/null || true
-    [ -n "$target_backup" ] && cp -a "$(readlink -f "$path" 2>/dev/null || echo "$path")" "$target_backup" 2>/dev/null || true
-  elif [ -e "$path" ]; then
-    cp -a "$path" "$backup" 2>/dev/null || true
-  else
-    : > "$backup" 2>/dev/null || true
-  fi
-  chmod_private_file "$backup"
-  [ -n "$target_backup" ] && chmod_private_file "$target_backup"
-  write_file_meta "$path" "$meta" "$backup"
-}
-

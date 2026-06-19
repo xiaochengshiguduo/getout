@@ -1,4 +1,4 @@
-SCRIPT_VERSION="2.0.2"
+SCRIPT_VERSION="2.0.3"
 INSTALL_PATH="/usr/local/bin/getout"
 UPDATE_URL="https://raw.githubusercontent.com/xiaochengshiguduo/getout/main/getout.sh"
 UPDATE_SHA256_URL="https://raw.githubusercontent.com/xiaochengshiguduo/getout/main/getout.sh.sha256"
@@ -72,7 +72,6 @@ WG_IFACE="wg0"
 # 02 logging helpers
 # 03 self install / update / checksum
 # 04 config permissions and file metadata
-# 05 resolver and managed file restore
 # 06 runtime/server rollback snapshots
 # 07 host prerequisites and binary downloads
 # 08 encoding, address, and SSH helpers

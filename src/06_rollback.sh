@@ -1,57 +1,48 @@
 # --- 06 runtime/server rollback snapshots ------------------------------------
 
-snapshot_runtime_files() {
-  local dir
+snapshot_files() {
+  local dir file base
   dir="$(mktemp -d)" || fatal "创建回滚快照失败。"
-  for file in "$CLIENT_CONF" "$TUN_CONF" "$ROUTES_UP" "$ROUTES_DOWN" "$TUN_SERVICE" "$MODE_FILE"; do
-    touch "$dir/$(basename "$file").missing" 2>/dev/null || true
+  for file in "$@"; do
+    base="$(basename "$file")"
+    touch "$dir/$base.missing" 2>/dev/null || true
     if [ -e "$file" ]; then
-      cp -a "$file" "$dir/$(basename "$file")" 2>/dev/null || true
-      rm -f "$dir/$(basename "$file").missing" 2>/dev/null || true
+      cp -a "$file" "$dir/$base" 2>/dev/null || true
+      rm -f "$dir/$base.missing" 2>/dev/null || true
     fi
   done
   echo "$dir"
+}
+
+snapshot_runtime_files() {
+  snapshot_files "$CLIENT_CONF" "$TUN_CONF" "$ROUTES_UP" "$ROUTES_DOWN" "$TUN_SERVICE" "$MODE_FILE"
 }
 
 snapshot_server_files() {
-  local dir file
-  dir="$(mktemp -d)" || fatal "创建入口回滚快照失败。"
-  for file in "$SERVER_CONF" "$GOST_SERVICE" "$MODE_FILE"; do
-    touch "$dir/$(basename "$file").missing" 2>/dev/null || true
-    if [ -e "$file" ]; then
-      cp -a "$file" "$dir/$(basename "$file")" 2>/dev/null || true
-      rm -f "$dir/$(basename "$file").missing" 2>/dev/null || true
+  snapshot_files "$SERVER_CONF" "$GOST_SERVICE" "$MODE_FILE"
+}
+
+restore_files() {
+  local dir="$1" file base
+  shift || true
+  [ -d "$dir" ] || return 0
+  for file in "$@"; do
+    base="$(basename "$file")"
+    if [ -e "$dir/$base" ]; then
+      cp -a "$dir/$base" "$file" 2>/dev/null || true
+    elif [ -e "$dir/$base.missing" ]; then
+      rm -f "$file" 2>/dev/null || true
     fi
   done
-  echo "$dir"
+  systemctl daemon-reload 2>/dev/null || true
 }
 
 restore_runtime_files() {
-  local dir="$1" file base
-  [ -d "$dir" ] || return 0
-  for file in "$CLIENT_CONF" "$TUN_CONF" "$ROUTES_UP" "$ROUTES_DOWN" "$TUN_SERVICE" "$MODE_FILE"; do
-    base="$(basename "$file")"
-    if [ -e "$dir/$base" ]; then
-      cp -a "$dir/$base" "$file" 2>/dev/null || true
-    elif [ -e "$dir/$base.missing" ]; then
-      rm -f "$file" 2>/dev/null || true
-    fi
-  done
-  systemctl daemon-reload 2>/dev/null || true
+  restore_files "$1" "$CLIENT_CONF" "$TUN_CONF" "$ROUTES_UP" "$ROUTES_DOWN" "$TUN_SERVICE" "$MODE_FILE"
 }
 
 restore_server_files() {
-  local dir="$1" file base
-  [ -d "$dir" ] || return 0
-  for file in "$SERVER_CONF" "$GOST_SERVICE" "$MODE_FILE"; do
-    base="$(basename "$file")"
-    if [ -e "$dir/$base" ]; then
-      cp -a "$dir/$base" "$file" 2>/dev/null || true
-    elif [ -e "$dir/$base.missing" ]; then
-      rm -f "$file" 2>/dev/null || true
-    fi
-  done
-  systemctl daemon-reload 2>/dev/null || true
+  restore_files "$1" "$SERVER_CONF" "$GOST_SERVICE" "$MODE_FILE"
 }
 
 remove_runtime_snapshot() {

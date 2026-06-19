@@ -15,7 +15,6 @@ src/
   02_logging.sh
   03_update.sh
   04_config.sh
-  05_resolver.sh
   06_rollback.sh
   07_deps_downloads.sh
   08_helpers.sh
@@ -39,7 +38,6 @@ tests/
 - `02_logging.sh`: log/fatal helpers.
 - `03_update.sh`: self-install, update, downloads used by update, and SHA256 verification.
 - `04_config.sh`: config directory setup, private file permissions, safe config checks, and file metadata helpers.
-- `05_resolver.sh`: managed resolver/gai restore helpers and conflict handling.
 - `06_rollback.sh`: runtime/server snapshots and rollback trap guard.
 - `07_deps_downloads.sh`: Debian/root checks, apt deps, TUN checks, gost/tun2socks downloads.
 - `08_helpers.sh`: quoting, escaping, IP/address helpers, SSH detection, and main IP detection.
