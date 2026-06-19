@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.0.8
+
+- WireGuard 入口启动依赖补充 `iptables`，避免缺少 NAT 命令导致 `wg-quick up` 失败。
+- 生成的 `routes-up.sh` 内置 `ensure_nftables`，避免出口启动时找不到函数。
+
 ## 2.0.7
 
 - 抽取服务重启与回滚检查公共逻辑，减少 tun2socks/SOCKS5/WireGuard 服务启动重复代码。

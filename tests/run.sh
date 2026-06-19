@@ -46,6 +46,7 @@ run_route_script_syntax() {
     write_routes_scripts
     bash -n "$ROUTES_UP"
     bash -n "$ROUTES_DOWN"
+    grep -q '^ensure_nftables()' "$ROUTES_UP"
   )
   pass 'generated route scripts syntax'
 }

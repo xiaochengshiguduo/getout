@@ -15,7 +15,7 @@ install_deps() {
   local missing=() cmd pkg
   declare -A map=(
     [curl]=curl [gzip]=gzip [gunzip]=gzip [ip]=iproute2 [ss]=iproute2
-    [systemctl]=systemd [sysctl]=procps [awk]=mawk [grep]=grep [sed]=sed [wg]=wireguard-tools [modprobe]=kmod
+    [systemctl]=systemd [sysctl]=procps [awk]=mawk [grep]=grep [sed]=sed [wg]=wireguard-tools [modprobe]=kmod [iptables]=iptables
   )
   for cmd in "${!map[@]}"; do
     command -v "$cmd" >/dev/null 2>&1 || missing+=("${map[$cmd]}")

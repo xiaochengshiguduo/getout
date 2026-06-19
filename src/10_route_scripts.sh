@@ -92,6 +92,13 @@ ssh_ports_text() {
   [ -n "$ports" ] || ports="22"
   printf '%s\n' "$ports"
 }
+ensure_nftables() {
+  command -v nft >/dev/null 2>&1 && return 0
+  echo "[信息] 正在安装 nftables..." >&2
+  apt-get update -y >/dev/null 2>&1 || return 1
+  apt-get install -y nftables >/dev/null 2>&1 || return 1
+  command -v nft >/dev/null 2>&1
+}
 add_ssh_port_rules() {
   local port
   for port in $(ssh_ports_text); do
