@@ -125,6 +125,18 @@ uninstall_all() {
   success "getout 已卸载并清理完成。"
 }
 
+print_status_address() {
+  local first="${1:-}" second="${2:-}"
+  if [ -n "$first" ] && [ -n "$second" ]; then
+    echo "地址: ${first}"
+    echo "      ${second}"
+  elif [ -n "$first" ]; then
+    echo "地址: ${first}"
+  elif [ -n "$second" ]; then
+    echo "地址: ${second}"
+  fi
+}
+
 status() {
   local mode gost_state tun_state wg_state gost_enabled tun_enabled wg_enabled
   mode="$(current_mode)"
@@ -194,14 +206,7 @@ status() {
       local ipv4 ipv6
       ipv4="$(main_ipv4 || true)"
       ipv6="$(main_ipv6 || true)"
-      if [ -n "$ipv4" ] && [ -n "$ipv6" ]; then
-        echo "地址: ${ipv4}"
-        echo "      ${ipv6}"
-      elif [ -n "$ipv4" ]; then
-        echo "地址: ${ipv4}"
-      elif [ -n "$ipv6" ]; then
-        echo "地址: ${ipv6}"
-      fi
+      print_status_address "$ipv4" "$ipv6"
       echo "端口: ${LISTEN_PORT:-}"
       if [ -n "${PEER_PRIVATE_KEY:-}" ]; then
         echo "私钥: ${PEER_PRIVATE_KEY}"
@@ -215,14 +220,7 @@ status() {
       local ipv4 ipv6
       ipv4="$(main_ipv4 || true)"
       ipv6="$(main_ipv6 || true)"
-      if [ -n "$ipv4" ] && [ -n "$ipv6" ]; then
-        echo "地址: ${ipv4}"
-        echo "      ${ipv6}"
-      elif [ -n "$ipv4" ]; then
-        echo "地址: ${ipv4}"
-      elif [ -n "$ipv6" ]; then
-        echo "地址: ${ipv6}"
-      fi
+      print_status_address "$ipv4" "$ipv6"
       echo "端口: ${PORT:-}"
       if [ -n "${USERNAME:-}" ]; then
         echo "用户名: ${USERNAME:-}"
@@ -248,10 +246,9 @@ status() {
       local v6_part="${addr#*,}"
       v6_part="${v6_part# }"
       if [ -n "$v6_part" ] && [ "$v6_part" != "$addr" ]; then
-        echo "地址: ${v4_part}"
-        echo "      ${v6_part}"
+        print_status_address "$v4_part" "$v6_part"
       else
-        echo "地址: ${addr}"
+        print_status_address "$addr"
       fi
       echo "端口: ${port}"
       echo "私钥: ${WG_CLIENT_PRIVATE_KEY:-}"

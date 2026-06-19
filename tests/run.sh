@@ -395,6 +395,7 @@ CONF
     curl() { echo test-ip; }
     status
   ) 2>&1)"
+  grep -q '地址: 203.0.113.1' <<<"$out"
   grep -q '私钥: client-private' <<<"$out"
   grep -q '公钥: server-public' <<<"$out"
   ! grep -q '私钥: server-private' <<<"$out"
