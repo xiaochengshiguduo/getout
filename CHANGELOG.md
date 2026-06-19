@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.0.4
+
+- 删除未使用的 `APP` 常量。
+- 合并 tun2socks/WireGuard runtime 的 nftables 预检规则，减少重复逻辑。
+
 ## 2.0.3
 
 - 删除未使用的旧函数和安装别名，减少维护面。
