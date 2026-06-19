@@ -332,6 +332,37 @@ run_binary_checksum_verification() {
   pass 'third-party binary checksum verification accepts match and rejects mismatch'
 }
 
+run_restart_service_with_rollback_restores_on_failure() {
+  local t="$TMP_ROOT/restart-rollback" lib out rc
+  lib="$t/lib.sh"
+  mkdir -p "$t"
+  make_lib "$lib"
+  cat > "$t/case.sh" <<'CASE'
+#!/usr/bin/env bash
+set -euo pipefail
+. "$1"
+root="$2"
+snapshot="$root/snapshot"
+mkdir -p "$snapshot"
+systemctl() {
+  case "$1" in
+    restart) return 0 ;;
+    is-active) return 1 ;;
+  esac
+}
+restore_test() { echo restored > "$root/restored"; }
+restart_service_with_rollback getout-test.service "$snapshot" restore_test restart 0 boom
+CASE
+  set +e
+  out="$(bash "$t/case.sh" "$lib" "$t" 2>&1)"
+  rc=$?
+  set -e
+  [ "$rc" -eq 1 ]
+  [ "$(cat "$t/restored")" = restored ]
+  grep -q 'boom' <<<"$out"
+  pass 'service restart rollback helper restores on failure'
+}
+
 run_client_config_writes_common_runtime_fields() {
   local t="$TMP_ROOT/client-conf" lib
   lib="$t/lib.sh"
@@ -415,5 +446,6 @@ run_menu_order_matches_readme
 run_checksum_file_matches_script
 run_checksum_verification
 run_binary_checksum_verification
+run_restart_service_with_rollback_restores_on_failure
 run_client_config_writes_common_runtime_fields
 run_wg_server_status_prints_peer_credentials
