@@ -296,7 +296,7 @@ Type=oneshot
 RemainAfterExit=yes
 ${pre_start}ExecStart=/usr/bin/wg-quick up $WG_CONF
 ExecStop=/usr/bin/wg-quick down $WG_CONF
-ExecStopPost=/bin/sh -c '/usr/bin/wg-quick down "$1" 2>/dev/null || true' -- $WG_CONF
+ExecStopPost=-/usr/bin/wg-quick down $WG_CONF
 
 [Install]
 WantedBy=multi-user.target

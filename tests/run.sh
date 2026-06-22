@@ -463,8 +463,8 @@ CONF
 
 
 
-run_wg_units_use_explicit_shell_for_cleanup() {
-  local t="$TMP_ROOT/wg-unit-shell" lib
+run_wg_units_use_ignored_wg_quick_cleanup() {
+  local t="$TMP_ROOT/wg-unit-cleanup" lib
   lib="$t/lib.sh"
   mkdir -p "$t/conf"
   make_lib "$lib"
@@ -479,13 +479,13 @@ run_wg_units_use_explicit_shell_for_cleanup() {
     ROUTES_DOWN="$t/routes-down.sh"
     systemctl() { :; }
     write_wg_service wg-v4
-    grep -q '^ExecStopPost=/bin/sh -c' "$WG_SERVICE"
-    ! grep -q '^ExecStopPost=/usr/bin/wg-quick.*2>/dev/null || true' "$WG_SERVICE"
+    grep -Fq "ExecStopPost=-/usr/bin/wg-quick down $WG_CONF" "$WG_SERVICE"
+    ! grep -q 'ExecStopPost=.*wg-v4' "$WG_SERVICE"
     write_wg_systemd_service 'Getout WireGuard Server'
-    grep -q '^ExecStopPost=/bin/sh -c' "$WG_SERVICE"
-    ! grep -q '^ExecStopPost=/usr/bin/wg-quick.*2>/dev/null || true' "$WG_SERVICE"
+    grep -Fq "ExecStopPost=-/usr/bin/wg-quick down $WG_CONF" "$WG_SERVICE"
+    ! grep -q 'ExecStopPost=.*Getout WireGuard Server' "$WG_SERVICE"
   )
-  pass 'WireGuard units use explicit shell for cleanup fallback'
+  pass 'WireGuard units use ignored wg-quick cleanup with concrete config path'
 }
 
 run_wg_config_rejects_injected_values() {
@@ -599,6 +599,6 @@ run_restart_service_with_rollback_restores_on_failure
 run_client_config_writes_common_runtime_fields
 run_wg_server_status_prints_peer_credentials
 run_wg_server_mode_is_not_client_mode
-run_wg_units_use_explicit_shell_for_cleanup
+run_wg_units_use_ignored_wg_quick_cleanup
 run_wg_config_rejects_injected_values
 run_wg_server_rejects_injected_values
