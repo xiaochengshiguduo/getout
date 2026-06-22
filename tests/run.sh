@@ -46,7 +46,12 @@ run_route_script_syntax() {
     write_routes_scripts
     bash -n "$ROUTES_UP"
     bash -n "$ROUTES_DOWN"
-    grep -q '^ensure_nftables()' "$ROUTES_UP"
+    grep -Fq 'exec "' "$ROUTES_UP"
+    grep -q ' route-up$' "$ROUTES_UP"
+    grep -q ' route-down$' "$ROUTES_DOWN"
+    grep -q 'route-up) route_up' "$SCRIPT"
+    grep -q 'route-down) route_down' "$SCRIPT"
+    ! grep -q 'apt-get' "$ROUTES_UP"
   )
   pass 'generated route scripts syntax'
 }
@@ -63,14 +68,18 @@ run_runtime_restore_deletes_new_files() {
     CONF_DIR="$t/etc-getout"
     CLIENT_CONF="$CONF_DIR/client.conf"
     TUN_CONF="$CONF_DIR/tun2socks.yaml"
+    WG_CONF="$CONF_DIR/getout-wg0.conf"
     ROUTES_UP="$CONF_DIR/routes-up.sh"
     ROUTES_DOWN="$CONF_DIR/routes-down.sh"
     TUN_SERVICE="$t/getout-tun.service"
+    WG_SERVICE="$t/getout-wg.service"
     MODE_FILE="$CONF_DIR/mode"
     systemctl() { :; }
     mkdir -p "$CONF_DIR"
     printf 'old-client\n' > "$CLIENT_CONF"
     printf 'old-routes-up\n' > "$ROUTES_UP"
+    printf 'old-wg-conf\n' > "$WG_CONF"
+    printf 'old-wg-service\n' > "$WG_SERVICE"
     snapshot="$(snapshot_runtime_files)"
     begin_runtime_rollback "$snapshot"
     printf 'new-client\n' > "$CLIENT_CONF"
@@ -78,10 +87,14 @@ run_runtime_restore_deletes_new_files() {
     printf 'new-routes-up\n' > "$ROUTES_UP"
     printf 'new-routes-down\n' > "$ROUTES_DOWN"
     printf 'new-service\n' > "$TUN_SERVICE"
+    printf 'new-wg-conf\n' > "$WG_CONF"
+    printf 'new-wg-service\n' > "$WG_SERVICE"
     printf 'dual\n' > "$MODE_FILE"
     restore_runtime_or_warn "$snapshot" >/dev/null 2>&1
     [ "$(cat "$CLIENT_CONF")" = old-client ]
     [ "$(cat "$ROUTES_UP")" = old-routes-up ]
+    [ "$(cat "$WG_CONF")" = old-wg-conf ]
+    [ "$(cat "$WG_SERVICE")" = old-wg-service ]
     [ ! -e "$TUN_CONF" ]
     [ ! -e "$ROUTES_DOWN" ]
     [ ! -e "$TUN_SERVICE" ]
@@ -246,8 +259,8 @@ run_stop_cleanup_order_protects_control_plane() {
     mkdir -p "$CONF_DIR"
     write_routes_scripts
     write_tun_service dual
-    lookup_line="$(grep -n 'ip rule del lookup "\$TABLE_ID" pref 20' "$ROUTES_DOWN" | head -n1 | cut -d: -f1)"
-    nft_line="$(grep -n 'nft delete table inet "\$NFT_TABLE"' "$ROUTES_DOWN" | head -n1 | cut -d: -f1)"
+    lookup_line="$(grep -n 'route_run_all ip rule del lookup "\$TABLE_ID" pref 20' "$lib" | head -n1 | cut -d: -f1)"
+    nft_line="$(grep -n 'route_run nft delete table inet "\$NFT_TABLE"' "$lib" | head -n1 | cut -d: -f1)"
     [ -n "$lookup_line" ] && [ -n "$nft_line" ] && [ "$lookup_line" -lt "$nft_line" ]
     grep -q "^ExecStop=$ROUTES_DOWN$" "$TUN_SERVICE"
     grep -q "^ExecStopPost=$ROUTES_DOWN$" "$TUN_SERVICE"
@@ -306,6 +319,24 @@ run_checksum_verification() {
   [ "$rc" -ne 0 ]
   grep -q 'SHA256 校验失败' <<<"$out"
   pass 'update checksum verification accepts match and rejects mismatch'
+}
+
+
+run_update_warns_when_wg_service_active() {
+  local t="$TMP_ROOT/update-wg" lib out
+  lib="$t/lib.sh"
+  mkdir -p "$t"
+  make_lib "$lib"
+  out="$(bash -c '
+    set -euo pipefail
+    . "$1"
+    require_root() { :; }
+    install_from_update_url() { :; }
+    service_active() { [ "$1" = getout-wg.service ]; }
+    update_getout
+  ' _ "$lib" 2>&1)"
+  grep -q 'getout 正在运行' <<<"$out"
+  pass 'update warns when WireGuard service is active'
 }
 
 run_binary_checksum_verification() {
@@ -434,6 +465,126 @@ CONF
   pass 'WireGuard entry status prints peer private key and server public key'
 }
 
+
+
+run_wg_units_use_ignored_wg_quick_cleanup() {
+  local t="$TMP_ROOT/wg-unit-cleanup" lib
+  lib="$t/lib.sh"
+  mkdir -p "$t/conf"
+  make_lib "$lib"
+  (
+    set -euo pipefail
+    # shellcheck disable=SC1090
+    . "$lib"
+    CONF_DIR="$t/conf"
+    WG_CONF="$CONF_DIR/getout-wg0.conf"
+    WG_SERVICE="$t/getout-wg.service"
+    ROUTES_UP="$t/routes-up.sh"
+    ROUTES_DOWN="$t/routes-down.sh"
+    systemctl() { :; }
+    write_wg_service wg-v4
+    grep -Fq "ExecStopPost=-/usr/bin/wg-quick down $WG_CONF" "$WG_SERVICE"
+    ! grep -q 'ExecStopPost=.*wg-v4' "$WG_SERVICE"
+    write_wg_systemd_service 'Getout WireGuard Server'
+    grep -Fq "ExecStopPost=-/usr/bin/wg-quick down $WG_CONF" "$WG_SERVICE"
+    ! grep -q 'ExecStopPost=.*Getout WireGuard Server' "$WG_SERVICE"
+  )
+  pass 'WireGuard units use ignored wg-quick cleanup with concrete config path'
+}
+
+run_wg_config_rejects_injected_values() {
+  local t="$TMP_ROOT/wg-injection" lib out rc
+  lib="$t/lib.sh"
+  mkdir -p "$t/conf"
+  make_lib "$lib"
+  cat > "$t/conf/client.conf" <<'CONF'
+MODE=wg-v4
+TRANSPORT=wireguard
+WG_SERVER_ADDRESS=example.com
+WG_SERVER_PORT=62233
+WG_CLIENT_PRIVATE_KEY='bad
+PostUp = touch /tmp/pwned'
+WG_CLIENT_ADDRESS=10.66.66.2/32
+WG_SERVER_PUBLIC_KEY=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=
+WG_PRESHARED_KEY=
+WG_DNS=
+CONF
+  chmod 600 "$t/conf/client.conf"
+  set +e
+  out="$( (
+    set -euo pipefail
+    # shellcheck disable=SC1090
+    . "$lib"
+    CONF_DIR="$t/conf"
+    CLIENT_CONF="$CONF_DIR/client.conf"
+    WG_CONF="$t/wg.conf"
+    write_wg_config
+  ) 2>&1)"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ]
+  grep -q 'WG_CLIENT_PRIVATE_KEY 无效' <<<"$out"
+  [ ! -f "$t/wg.conf" ]
+  pass 'WireGuard client config rejects newline injection before writing wg config'
+}
+
+run_wg_server_rejects_injected_values() {
+  local t="$TMP_ROOT/wg-server-injection" lib out rc
+  lib="$t/lib.sh"
+  mkdir -p "$t/conf"
+  make_lib "$lib"
+  cat > "$t/conf/server.conf" <<'CONF'
+SERVER_MODE=wireguard
+LISTEN_PORT=62233
+PRIVATE_KEY=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=
+ADDRESS='10.66.66.1/30
+PostUp = touch /tmp/pwned'
+PEER_PUBLIC_KEY=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb=
+ALLOWED_IPS=10.66.66.2/32
+CONF
+  chmod 600 "$t/conf/server.conf"
+  set +e
+  out="$( (
+    set -euo pipefail
+    # shellcheck disable=SC1090
+    . "$lib"
+    CONF_DIR="$t/conf"
+    SERVER_CONF="$CONF_DIR/server.conf"
+    WG_CONF="$t/wg.conf"
+    WG_SERVICE="$t/wg.service"
+    systemctl() { :; }
+    write_wg_server_service
+  ) 2>&1)"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ]
+  grep -q 'ADDRESS 无效' <<<"$out"
+  [ ! -f "$t/wg.conf" ]
+  pass 'WireGuard server config rejects newline injection before writing wg config'
+}
+
+
+run_wg_server_mode_is_not_client_mode() {
+  local t="$TMP_ROOT/wg-mode" lib
+  lib="$t/lib.sh"
+  mkdir -p "$t/conf"
+  make_lib "$lib"
+  (
+    set -euo pipefail
+    # shellcheck disable=SC1090
+    . "$lib"
+    CONF_DIR="$t/conf"
+    MODE_FILE="$CONF_DIR/mode"
+    mkdir -p "$CONF_DIR"
+    echo wg-server > "$MODE_FILE"
+    systemctl() { [ "$1" = is-active ] && [ "${3:-}" = getout-wg.service ]; }
+    wg_server_active
+    ! wg_client_active
+    ! client_mode_active wg-server
+  )
+  pass 'wg-server mode is not treated as a WireGuard client mode'
+}
+
 run_build_output_is_current
 run_bash_syntax
 run_route_script_syntax
@@ -446,7 +597,12 @@ run_password_prompts_are_plaintext
 run_menu_order_matches_readme
 run_checksum_file_matches_script
 run_checksum_verification
+run_update_warns_when_wg_service_active
 run_binary_checksum_verification
 run_restart_service_with_rollback_restores_on_failure
 run_client_config_writes_common_runtime_fields
 run_wg_server_status_prints_peer_credentials
+run_wg_server_mode_is_not_client_mode
+run_wg_units_use_ignored_wg_quick_cleanup
+run_wg_config_rejects_injected_values
+run_wg_server_rejects_injected_values

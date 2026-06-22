@@ -18,11 +18,9 @@ menu_action_label() {
   esac
 }
 
-menu() {
+print_menu() {
   clear || true
-  echo -e "${BLUE}====================================================${NC}"
-  echo -e "${BLUE}                 getout 管理面板${NC}"
-  echo -e "${BLUE}====================================================${NC}"
+  print_header "getout 管理面板" "$BLUE"
   echo "--- 入口 ---"
   echo "  1.$(menu_action_label server)"
   echo "  2.$(menu_action_label wg-server)"
@@ -41,21 +39,33 @@ menu() {
   echo "  13.卸载 getout"
   echo "  14.退出"
   echo
-  read -rp "请选择 [1-14]: " choice
+}
+
+configure_entry_menu() {
+  local entry_choice
+  echo -e "${BLUE}修改入口:${NC}"
+  echo "  1. SOCKS5 模式"
+  echo "  2. WireGuard 模式"
+  read -rp "请选择 [1/2]: " entry_choice
+  case "$entry_choice" in
+    1) configure_server ;;
+    2) configure_wg_server ;;
+    *) fatal "无效选项。" ;;
+  esac
+}
+
+confirm_uninstall() {
+  local yn
+  read -rp "确认卸载 getout? [y/N]: " yn
+  [[ "$yn" =~ ^[Yy]$ ]] && uninstall_all || echo "已取消"
+}
+
+handle_menu_choice() {
+  local choice="$1"
   case "$choice" in
     1) if server_active; then stop_server; else start_server; fi ;;
     2) if wg_server_active; then stop_wg_server; else start_wg_server; fi ;;
-    3)
-      echo -e "${BLUE}修改入口:${NC}"
-      echo "  1. SOCKS5 模式"
-      echo "  2. WireGuard 模式"
-      read -rp "请选择 [1/2]: " entry_choice
-      case "$entry_choice" in
-        1) configure_server ;;
-        2) configure_wg_server ;;
-        *) fatal "无效选项。" ;;
-      esac
-      ;;
+    3) configure_entry_menu ;;
     4) if client_mode_active v4; then stop_client; else start_client v4; fi ;;
     5) if client_mode_active dual; then stop_client; else start_client dual; fi ;;
     6) if client_mode_active wg-v4; then stop_client; else start_wg_client wg-v4; fi ;;
@@ -65,10 +75,17 @@ menu() {
     10) status ;;
     11) restart_getout ;;
     12) update_getout ;;
-    13) read -rp "确认卸载 getout? [y/N]: " yn; [[ "$yn" =~ ^[Yy]$ ]] && uninstall_all || echo "已取消" ;;
+    13) confirm_uninstall ;;
     14) exit 0 ;;
     *) fatal "无效选项。" ;;
   esac
+}
+
+menu() {
+  local choice
+  print_menu
+  read -rp "请选择 [1-14]: " choice
+  handle_menu_choice "$choice"
 }
 
 usage() {
@@ -115,7 +132,7 @@ main() {
     *) secure_existing_files ;;
   esac
   case "${1:-}" in
-    uninstall|remove|un|doctor|check|-h|--help|help) ;;
+    uninstall|remove|un|doctor|check|route-up|route-down|-h|--help|help) ;;
     *) ensure_global_command ;;
   esac
 
@@ -130,6 +147,8 @@ main() {
     restart) restart_getout ;;
     status) status ;;
     doctor|check) doctor_check ;;
+    route-up) route_up ;;
+    route-down) route_down ;;
     update) update_getout ;;
     uninstall|remove|un) uninstall_all ;;
     -h|--help|help) usage ;;

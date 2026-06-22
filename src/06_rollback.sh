@@ -15,11 +15,11 @@ snapshot_files() {
 }
 
 snapshot_runtime_files() {
-  snapshot_files "$CLIENT_CONF" "$TUN_CONF" "$ROUTES_UP" "$ROUTES_DOWN" "$TUN_SERVICE" "$MODE_FILE"
+  snapshot_files "$CLIENT_CONF" "$TUN_CONF" "$WG_CONF" "$ROUTES_UP" "$ROUTES_DOWN" "$TUN_SERVICE" "$WG_SERVICE" "$MODE_FILE"
 }
 
 snapshot_server_files() {
-  snapshot_files "$SERVER_CONF" "$GOST_SERVICE" "$MODE_FILE"
+  snapshot_files "$SERVER_CONF" "$GOST_SERVICE" "$WG_CONF" "$WG_SERVICE" "$MODE_FILE"
 }
 
 restore_files() {
@@ -38,11 +38,11 @@ restore_files() {
 }
 
 restore_runtime_files() {
-  restore_files "$1" "$CLIENT_CONF" "$TUN_CONF" "$ROUTES_UP" "$ROUTES_DOWN" "$TUN_SERVICE" "$MODE_FILE"
+  restore_files "$1" "$CLIENT_CONF" "$TUN_CONF" "$WG_CONF" "$ROUTES_UP" "$ROUTES_DOWN" "$TUN_SERVICE" "$WG_SERVICE" "$MODE_FILE"
 }
 
 restore_server_files() {
-  restore_files "$1" "$SERVER_CONF" "$GOST_SERVICE" "$MODE_FILE"
+  restore_files "$1" "$SERVER_CONF" "$GOST_SERVICE" "$WG_CONF" "$WG_SERVICE" "$MODE_FILE"
 }
 
 remove_runtime_snapshot() {
@@ -83,9 +83,11 @@ secure_existing_files() {
   chmod_private_file "$SERVER_CONF"
   chmod_private_file "$CLIENT_CONF"
   chmod_private_file "$TUN_CONF"
+  chmod_private_file "$WG_CONF"
   chmod_private_file "$MODE_FILE"
   chmod_private_file "$GOST_SERVICE"
   chmod_private_file "$TUN_SERVICE"
+  chmod_private_file "$WG_SERVICE"
   [ -f "$ROUTES_UP" ] && chmod 700 "$ROUTES_UP" 2>/dev/null || true
   [ -f "$ROUTES_DOWN" ] && chmod 700 "$ROUTES_DOWN" 2>/dev/null || true
 }
