@@ -20,9 +20,7 @@ menu_action_label() {
 
 print_menu() {
   clear || true
-  echo -e "${BLUE}====================================================${NC}"
-  echo -e "${BLUE}                 getout 管理面板${NC}"
-  echo -e "${BLUE}====================================================${NC}"
+  print_header "getout 管理面板" "$BLUE"
   echo "--- 入口 ---"
   echo "  1.$(menu_action_label server)"
   echo "  2.$(menu_action_label wg-server)"

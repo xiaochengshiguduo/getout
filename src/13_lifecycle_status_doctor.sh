@@ -235,10 +235,17 @@ print_client_info() {
   esac
 }
 
+fetch_public_ip() {
+  local family="$1" primary="$2" fallback="$3"
+  curl "$family" -s --connect-timeout 8 --max-time 12 "$primary" || \
+    curl "$family" -s --connect-timeout 8 --max-time 12 "$fallback" || \
+    printf '失败'
+}
+
 print_outlet_test() {
   echo "出口测试:"
-  echo -n "IPv4: "; curl -4 -s --connect-timeout 8 --max-time 12 https://api.ipify.org || curl -4 -s --connect-timeout 8 --max-time 12 http://v4.ident.me || echo -n "失败"; echo
-  echo -n "IPv6: "; curl -6 -s --connect-timeout 8 --max-time 12 https://api64.ipify.org || curl -6 -s --connect-timeout 8 --max-time 12 http://v6.ident.me || echo -n "失败"; echo
+  printf 'IPv4: '; fetch_public_ip -4 https://api.ipify.org http://v4.ident.me; echo
+  printf 'IPv6: '; fetch_public_ip -6 https://api64.ipify.org http://v6.ident.me; echo
 }
 
 status() {
@@ -249,7 +256,7 @@ status() {
   tun_active && tun_state="运行中"
   (wg_server_active || wg_client_active) && wg_state="运行中"
 
-  echo -e "${CYAN}========== getout 状态 ==========${NC}"
+  print_header "getout 状态" "$CYAN"
   echo "版本: $SCRIPT_VERSION"
   echo
   print_current_status "$mode" "$gost_state" "$tun_state" "$wg_state"
@@ -334,7 +341,7 @@ doctor_check() {
   local mode
   doctor_failed=0
   mode="$(current_mode)"
-  echo -e "${CYAN}========== getout doctor ==========${NC}"
+  print_header "getout doctor" "$CYAN"
   echo "版本: $SCRIPT_VERSION"
   echo
   check_host_requirements
