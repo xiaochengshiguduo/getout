@@ -590,6 +590,75 @@ get_v6_network() {
   fi
 }
 
+
+valid_port() { [[ "${1:-}" =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]; }
+valid_wg_key() { [[ "${1:-}" =~ ^[A-Za-z0-9+/]{43}=$ ]]; }
+valid_ipv4_addr() {
+  local a b c d
+  [[ "${1:-}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+  IFS=. read -r a b c d <<< "$1"
+  [ "$a" -le 255 ] && [ "$b" -le 255 ] && [ "$c" -le 255 ] && [ "$d" -le 255 ]
+}
+valid_cidr() {
+  local cidr="${1:-}" addr prefix
+  [[ "$cidr" == */* ]] || return 1
+  addr="${cidr%%/*}"; prefix="${cidr##*/}"
+  [[ "$prefix" =~ ^[0-9]+$ ]] || return 1
+  if is_ipv6 "$addr"; then
+    [ "$prefix" -ge 0 ] && [ "$prefix" -le 128 ] && [[ "$addr" =~ ^[0-9A-Fa-f:.]+$ ]]
+  else
+    valid_ipv4_addr "$addr" && [ "$prefix" -ge 0 ] && [ "$prefix" -le 32 ]
+  fi
+}
+valid_cidr_list() {
+  local value="${1:-}" item
+  local -a _cidrs
+  [ -n "$value" ] || return 1
+  [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || return 1
+  IFS=',' read -r -a _cidrs <<< "$value"
+  for item in "${_cidrs[@]}"; do
+    item="${item//[[:space:]]/}"
+    [ -n "$item" ] && valid_cidr "$item" || return 1
+  done
+}
+valid_dns_list() {
+  local value="${1:-}" item
+  local -a _dns_items
+  [ -n "$value" ] || return 0
+  [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || return 1
+  IFS=',' read -r -a _dns_items <<< "$value"
+  for item in "${_dns_items[@]}"; do
+    item="${item//[[:space:]]/}"
+    [ -n "$item" ] || return 1
+    [[ "$item" != *$'\n'* && "$item" != *$'\r'* && "$item" != *'='* ]] || return 1
+    if is_ipv6 "$item" || valid_ipv4_addr "$item"; then
+      continue
+    fi
+    [[ "$item" =~ ^[A-Za-z0-9.-]+$ ]] || return 1
+  done
+}
+valid_endpoint_host() {
+  local host="${1:-}"
+  [ -n "$host" ] || return 1
+  [[ "$host" != *$'\n'* && "$host" != *$'\r'* && "$host" != *[[:space:]]* ]] || return 1
+  [[ "$host" != *'['* && "$host" != *']'* && "$host" != *'/'* && "$host" != *'%'* ]] || return 1
+  if is_ipv6 "$host" || valid_ipv4_addr "$host"; then
+    return 0
+  fi
+  [[ "$host" =~ ^[A-Za-z0-9.-]+$ ]]
+}
+format_endpoint_host() {
+  local host
+  host="$(strip_brackets "$1")"
+  valid_endpoint_host "$host" || fatal "Endpoint 地址无效：$1"
+  if is_ipv6 "$host"; then printf '[%s]' "$host"; else printf '%s' "$host"; fi
+}
+require_valid_wg_key() { valid_wg_key "$2" || fatal "$1 无效。"; }
+require_valid_port() { valid_port "$2" || fatal "$1 无效：$2"; }
+require_valid_cidr_list() { valid_cidr_list "$2" || fatal "$1 无效：$2"; }
+require_valid_dns_list() { valid_dns_list "$2" || fatal "$1 无效：$2"; }
+
+
 main_ipv4() {
   ip -4 route get 1.1.1.1 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}' || true
 }
@@ -1302,7 +1371,7 @@ prompt_wg_server_info() {
   # 只询问端口
   read -rp "端口 [默认: ${DEFAULT_WG_PORT}]: " listen_port
   listen_port="${listen_port:-$DEFAULT_WG_PORT}"
-  [[ "$listen_port" =~ ^[0-9]+$ ]] && [ "$listen_port" -ge 1 ] && [ "$listen_port" -le 65535 ] || fatal "端口无效：$listen_port"
+  require_valid_port "端口" "$listen_port"
 
   # 固定参数（无需询问）
   local listen_addr="::"
@@ -1339,33 +1408,33 @@ prompt_wg_server_info() {
   chmod_private_file "$SERVER_CONF"
 }
 
-write_wg_server_service() {
-  [ -f "$SERVER_CONF" ] || fatal "未找到入口配置，请先修改入口信息。"
-  assert_private_config "$SERVER_CONF"
-  # shellcheck disable=SC1090
-  . "$SERVER_CONF"
+validate_wg_server_conf() {
   [ -n "${LISTEN_PORT:-}" ] || fatal "入口配置缺少 LISTEN_PORT。"
   [ -n "${ADDRESS:-}" ] || fatal "入口配置缺少 ADDRESS。"
   [ -n "${PRIVATE_KEY:-}" ] || fatal "入口配置缺少 PRIVATE_KEY。"
   [ -n "${PEER_PUBLIC_KEY:-}" ] || fatal "入口配置缺少 PEER_PUBLIC_KEY。"
+  require_valid_port "LISTEN_PORT" "$LISTEN_PORT"
+  require_valid_cidr_list "ADDRESS" "$ADDRESS"
+  require_valid_wg_key "PRIVATE_KEY" "$PRIVATE_KEY"
+  require_valid_wg_key "PEER_PUBLIC_KEY" "$PEER_PUBLIC_KEY"
+  [ -z "${ALLOWED_IPS:-}" ] || require_valid_cidr_list "ALLOWED_IPS" "$ALLOWED_IPS"
+}
 
-  local listen_addr="${LISTEN_ADDRESS:-::}"
-  local peer_allowed
+wg_server_peer_allowed() {
   if [ -n "${ALLOWED_IPS:-}" ]; then
-    peer_allowed="$ALLOWED_IPS"
-  else
-    # 兼容旧配置：从 ADDRESS 提取 IPv4 部分推导 AllowedIPs
-    local addr_v4="${ADDRESS%%,*}"
-    addr_v4="${addr_v4// /}"
-    peer_allowed="${addr_v4%.*}.2/32,${DEFAULT_WG_V6_ADDRESS%%::*}::2/128"
+    printf '%s\n' "$ALLOWED_IPS"
+    return 0
   fi
+  local addr_v4="${ADDRESS%%,*}"
+  addr_v4="${addr_v4// /}"
+  printf '%s\n' "${addr_v4%.*}.2/32,${DEFAULT_WG_V6_ADDRESS%%::*}::2/128"
+}
 
-  # 从 ADDRESS 提取子网并生成 NAT 规则
-  local nat_up="" nat_down=""
-  local v4_net="" v6_net=""
-  local addr_part
-  for addr_part in ${ADDRESS//,/ }; do
-    addr_part="${addr_part// /}"
+wg_server_nat_lines() {
+  local v4_net="" v6_net="" addr_part
+  IFS=',' read -r -a _wg_addr_parts <<< "$ADDRESS"
+  for addr_part in "${_wg_addr_parts[@]}"; do
+    addr_part="${addr_part//[[:space:]]/}"
     [ -n "$addr_part" ] || continue
     if is_ipv6 "${addr_part%%/*}"; then
       v6_net="$(get_v6_network "$addr_part")"
@@ -1373,49 +1442,53 @@ write_wg_server_service() {
       v4_net="$(get_v4_network "$addr_part")"
     fi
   done
-  [ -n "$v4_net" ] && {
-    nat_up+="PostUp = iptables -t nat -A POSTROUTING -s $v4_net ! -o %i -j MASQUERADE\n"
-    nat_up+="PostUp = iptables -A FORWARD -i %i -j ACCEPT\n"
-    nat_up+="PostUp = iptables -A FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT\n"
-    nat_down+="PostDown = iptables -t nat -D POSTROUTING -s $v4_net ! -o %i -j MASQUERADE\n"
-    nat_down+="PostDown = iptables -D FORWARD -i %i -j ACCEPT\n"
-    nat_down+="PostDown = iptables -D FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT\n"
-  }
-  [ -n "$v6_net" ] && command -v ip6tables >/dev/null 2>&1 && {
-    nat_up+="PostUp = ip6tables -t nat -A POSTROUTING -s $v6_net ! -o %i -j MASQUERADE\n"
-    nat_up+="PostUp = ip6tables -A FORWARD -i %i -j ACCEPT\n"
-    nat_up+="PostUp = ip6tables -A FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT\n"
-    nat_down+="PostDown = ip6tables -t nat -D POSTROUTING -s $v6_net ! -o %i -j MASQUERADE\n"
-    nat_down+="PostDown = ip6tables -D FORWARD -i %i -j ACCEPT\n"
-    nat_down+="PostDown = ip6tables -D FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT\n"
-  }
+  if [ -n "$v4_net" ]; then
+    printf 'PostUp = iptables -t nat -A POSTROUTING -s %s ! -o %%i -j MASQUERADE\n' "$v4_net"
+    printf 'PostUp = iptables -A FORWARD -i %%i -j ACCEPT\n'
+    printf 'PostUp = iptables -A FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT\n'
+    printf 'PostDown = iptables -t nat -D POSTROUTING -s %s ! -o %%i -j MASQUERADE\n' "$v4_net"
+    printf 'PostDown = iptables -D FORWARD -i %%i -j ACCEPT\n'
+    printf 'PostDown = iptables -D FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT\n'
+  fi
+  if [ -n "$v6_net" ] && command -v ip6tables >/dev/null 2>&1; then
+    printf 'PostUp = ip6tables -t nat -A POSTROUTING -s %s ! -o %%i -j MASQUERADE\n' "$v6_net"
+    printf 'PostUp = ip6tables -A FORWARD -i %%i -j ACCEPT\n'
+    printf 'PostUp = ip6tables -A FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT\n'
+    printf 'PostDown = ip6tables -t nat -D POSTROUTING -s %s ! -o %%i -j MASQUERADE\n' "$v6_net"
+    printf 'PostDown = ip6tables -D FORWARD -i %%i -j ACCEPT\n'
+    printf 'PostDown = ip6tables -D FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT\n'
+  fi
+}
 
-  # 写入 WireGuard 配置文件
+write_wg_server_conf_file() {
+  local peer_allowed
+  peer_allowed="$(wg_server_peer_allowed)"
   cat > "$WG_CONF" <<EOF
 [Interface]
 Address = ${ADDRESS}
 ListenPort = ${LISTEN_PORT}
 PrivateKey = ${PRIVATE_KEY}
-$(echo -e "$nat_up$nat_down")
+$(wg_server_nat_lines)
 [Peer]
 PublicKey = ${PEER_PUBLIC_KEY}
 AllowedIPs = ${peer_allowed}
 EOF
   chmod_private_file "$WG_CONF"
+}
 
-  # 写入 systemd service
+write_wg_systemd_service() {
+  local description="$1"
+  local pre_start="${2:-}"
   cat > "$WG_SERVICE" <<EOF
 [Unit]
-Description=Getout WireGuard Server
+Description=$description
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/sbin/sysctl -w net.ipv4.ip_forward=1
-ExecStartPre=/sbin/sysctl -w net.ipv6.conf.all.forwarding=1
-ExecStart=/usr/bin/wg-quick up $WG_CONF
+${pre_start}ExecStart=/usr/bin/wg-quick up $WG_CONF
 ExecStop=/usr/bin/wg-quick down $WG_CONF
 ExecStopPost=/usr/bin/wg-quick down $WG_CONF 2>/dev/null || true
 
@@ -1424,6 +1497,17 @@ WantedBy=multi-user.target
 EOF
   chmod_private_file "$WG_SERVICE"
   systemctl daemon-reload
+}
+
+write_wg_server_service() {
+  [ -f "$SERVER_CONF" ] || fatal "未找到入口配置，请先修改入口信息。"
+  assert_private_config "$SERVER_CONF"
+  # shellcheck disable=SC1090
+  . "$SERVER_CONF"
+  validate_wg_server_conf
+  write_wg_server_conf_file
+  write_wg_systemd_service "Getout WireGuard Server" \
+    $'ExecStartPre=/sbin/sysctl -w net.ipv4.ip_forward=1\nExecStartPre=/sbin/sysctl -w net.ipv6.conf.all.forwarding=1\n'
 }
 
 start_wg_server() {
@@ -1546,7 +1630,7 @@ write_runtime_common_conf() {
   local ssh_ip ssh_ports v4 v6 runtime_dns
   case "$priority_mode" in v4|v6) ;; *) priority_mode="$(current_priority_mode)" ;; esac
   ssh_ip="$(ssh_remote_ip || true)"
-  ssh_ports="$(ssh_listen_ports | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+  ssh_ports="$(ssh_listen_ports 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//' || true)"
   v4="$(main_ipv4 || true)"
   v6="$(main_ipv6 || true)"
   runtime_dns="$(runtime_dns_servers_text "$priority_mode")"
@@ -1630,7 +1714,7 @@ ask_wg_config() {
 
   read -rp "端口 [默认: ${DEFAULT_WG_PORT}]: " server_port
   server_port="${server_port:-$DEFAULT_WG_PORT}"
-  [[ "$server_port" =~ ^[0-9]+$ ]] && [ "$server_port" -ge 1 ] && [ "$server_port" -le 65535 ] || fatal "端口无效：$server_port"
+  require_valid_port "端口" "$server_port"
 
   read -rp "私钥: " client_private_key
   [ -n "$client_private_key" ] || fatal "客户端私钥不能为空。"
@@ -1692,6 +1776,14 @@ write_wg_config() {
   # shellcheck disable=SC1090
   . "$CLIENT_CONF"
   [ "${TRANSPORT:-}" = "wireguard" ] || return 1
+  require_valid_wg_key "WG_CLIENT_PRIVATE_KEY" "${WG_CLIENT_PRIVATE_KEY:-}"
+  require_valid_wg_key "WG_SERVER_PUBLIC_KEY" "${WG_SERVER_PUBLIC_KEY:-}"
+  [ -z "${WG_PRESHARED_KEY:-}" ] || require_valid_wg_key "WG_PRESHARED_KEY" "$WG_PRESHARED_KEY"
+  require_valid_cidr_list "WG_CLIENT_ADDRESS" "${WG_CLIENT_ADDRESS:-$(default_wg_addr "${MODE:-wg-v4}")}"
+  require_valid_dns_list "WG_DNS" "${WG_DNS:-$DEFAULT_WG_DNS}"
+  require_valid_port "WG_SERVER_PORT" "${WG_SERVER_PORT:-}"
+  local endpoint_host
+  endpoint_host="$(format_endpoint_host "${WG_SERVER_ADDRESS:-}")"
 
   local iface="${TUN_NAME:-getout-${WG_IFACE}}"
   cat > "$WG_CONF" <<EOF
@@ -1704,7 +1796,7 @@ Table = off
 [Peer]
 PublicKey = ${WG_SERVER_PUBLIC_KEY}
 $(if [ -n "${WG_PRESHARED_KEY:-}" ]; then echo "PresharedKey = ${WG_PRESHARED_KEY}"; fi)
-Endpoint = [${WG_SERVER_ADDRESS}]:${WG_SERVER_PORT}
+Endpoint = ${endpoint_host}:${WG_SERVER_PORT}
 AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 25
 EOF
@@ -1971,24 +2063,32 @@ priority_action_label() {
   esac
 }
 
-switch_priority_mode() {
-  require_root; require_debian; install_deps
-  [ -f "$CLIENT_CONF" ] || fatal "未找到出口配置，请先修改出口信息。"
-  local mode transport snapshot was_active priority_mode
-  assert_private_config "$CLIENT_CONF"
-  # shellcheck disable=SC1090
-  . "$CLIENT_CONF"
-  transport="${TRANSPORT:-socks5}"
-  snapshot="$(snapshot_runtime_files)"
-  begin_runtime_rollback "$snapshot"
+next_priority_mode() {
+  case "$(current_priority_mode)" in
+    v4) echo v6 ;;
+    *) echo v4 ;;
+  esac
+}
+
+rewrite_wg_client_priority_conf() {
+  local priority_mode="$1" mode="${MODE:-wg-v4}"
+  write_wg_client_conf "$mode" "$WG_SERVER_ADDRESS" "$WG_SERVER_PORT" "$WG_CLIENT_PRIVATE_KEY" \
+    "${WG_CLIENT_ADDRESS:-$(default_wg_addr "$mode")}" "$WG_SERVER_PUBLIC_KEY" \
+    "${WG_PRESHARED_KEY:-}" "${WG_DNS:-$DEFAULT_WG_DNS}" "$priority_mode"
+}
+
+rewrite_socks_client_priority_conf() {
+  local priority_mode="$1" mode="${MODE:-v4}"
+  local address="${SOCKS_ADDRESS:-}" port="${SOCKS_PORT:-}" username="${SOCKS_USERNAME:-}" password="${SOCKS_PASSWORD:-}"
+  [ -n "$address" ] && [ -n "$port" ] || fatal "出口配置不完整，请先修改出口信息。"
+  write_client_conf "$mode" "$address" "$port" "$username" "$password" "$priority_mode"
+}
+
+apply_client_priority_runtime() {
+  local transport="$1" snapshot="$2" was_active=0 mode
   if [ "$transport" = "wireguard" ]; then
-    was_active=0; wg_client_active && was_active=1
+    wg_client_active && was_active=1
     mode="${MODE:-wg-v4}"
-    case "$(current_priority_mode)" in
-      v4) priority_mode="v6" ;;
-      *) priority_mode="v4" ;;
-    esac
-    write_wg_client_conf "$mode" "$WG_SERVER_ADDRESS" "$WG_SERVER_PORT" "$WG_CLIENT_PRIVATE_KEY" "${WG_CLIENT_ADDRESS:-$(default_wg_addr "$mode")}" "$WG_SERVER_PUBLIC_KEY" "${WG_PRESHARED_KEY:-}" "${WG_DNS:-$DEFAULT_WG_DNS}" "$priority_mode"
     write_wg_config
     write_routes_scripts
     write_wg_service "$mode"
@@ -2002,15 +2102,8 @@ switch_priority_mode() {
       clear_runtime_rollback "$snapshot"
     fi
   else
-    was_active=0; tun_active && was_active=1
+    tun_active && was_active=1
     mode="${MODE:-v4}"
-    local address="${SOCKS_ADDRESS:-}" port="${SOCKS_PORT:-}" username="${SOCKS_USERNAME:-}" password="${SOCKS_PASSWORD:-}"
-    [ -n "$address" ] && [ -n "$port" ] || fatal "出口配置不完整，请先修改出口信息。"
-    case "$(current_priority_mode)" in
-      v4) priority_mode="v6" ;;
-      *) priority_mode="v4" ;;
-    esac
-    write_client_conf "$mode" "$address" "$port" "$username" "$password" "$priority_mode"
     write_tun_config
     write_routes_scripts
     write_tun_service "$mode"
@@ -2024,13 +2117,33 @@ switch_priority_mode() {
       clear_runtime_rollback "$snapshot"
     fi
   fi
+}
+
+switch_priority_mode() {
+  require_root; require_debian; install_deps
+  [ -f "$CLIENT_CONF" ] || fatal "未找到出口配置，请先修改出口信息。"
+  local transport snapshot priority_mode
+  assert_private_config "$CLIENT_CONF"
+  # shellcheck disable=SC1090
+  . "$CLIENT_CONF"
+  transport="${TRANSPORT:-socks5}"
+  priority_mode="$(next_priority_mode)"
+  snapshot="$(snapshot_runtime_files)"
+  begin_runtime_rollback "$snapshot"
+  if [ "$transport" = "wireguard" ]; then
+    rewrite_wg_client_priority_conf "$priority_mode"
+  else
+    rewrite_socks_client_priority_conf "$priority_mode"
+  fi
+  # shellcheck disable=SC1090
+  . "$CLIENT_CONF"
+  apply_client_priority_runtime "$transport" "$snapshot"
   case "$priority_mode" in
     v4) success "已切换至 V4 优先模式。" ;;
     v6) success "已切换至 V6 优先模式。" ;;
   esac
   status
 }
-
 # --- 13 lifecycle, status, and diagnostics -----------------------------------
 
 cleanup_rules() {
@@ -2039,105 +2152,128 @@ cleanup_rules() {
   restore_managed_files_fallback
 }
 
+restart_server_mode() {
+  local snapshot
+  ensure_conf_dir
+  snapshot="$(snapshot_server_files)"
+  begin_server_rollback "$snapshot"
+  [ -f "$SERVER_CONF" ] || fatal "未找到入口配置，请先修改入口信息。"
+  chmod_private_file "$SERVER_CONF"
+  write_gost_service
+  echo "server" > "$MODE_FILE"
+  chmod_private_file "$MODE_FILE"
+  restart_gost_with_rollback "$snapshot" restart
+  systemctl enable getout-gost.service >/dev/null 2>&1 || true
+  systemctl disable getout-tun.service getout-wg.service >/dev/null 2>&1 || true
+  success "入口已重启。"
+}
+
+restart_wg_server_mode() {
+  local snapshot
+  ensure_conf_dir
+  snapshot="$(snapshot_server_files)"
+  begin_server_rollback "$snapshot"
+  [ -f "$SERVER_CONF" ] || fatal "未找到入口配置，请先修改入口信息。"
+  assert_private_config "$SERVER_CONF"
+  # shellcheck disable=SC1090
+  . "$SERVER_CONF"
+  [ "${SERVER_MODE:-}" = "wireguard" ] || fatal "入口配置不是 WireGuard 模式。"
+  write_wg_server_service
+  if ip link show getout-wg0 &>/dev/null; then
+    wg-quick down "$WG_CONF" 2>/dev/null || ip link del getout-wg0 2>/dev/null || true
+  fi
+  restart_gw_service_with_server_rollback "$snapshot"
+  systemctl enable getout-wg.service >/dev/null 2>&1 || true
+  systemctl disable getout-gost.service getout-tun.service >/dev/null 2>&1 || true
+  success "入口 WireGuard 模式已重启。"
+}
+
+restart_gw_service_with_server_rollback() {
+  local snapshot="$1"
+  systemctl restart getout-wg.service
+  sleep 2
+  if ! systemctl is-active --quiet getout-wg.service; then
+    restore_server_or_warn "$snapshot"
+    fatal "getout-wg.service 启动失败，请查看：journalctl -u getout-wg.service -e"
+  fi
+  clear_runtime_rollback "$snapshot"
+}
+
+rewrite_tun_runtime_for_restart() {
+  local mode="$1" address port username password priority_mode
+  [ -f "$CLIENT_CONF" ] || return 0
+  assert_private_config "$CLIENT_CONF"
+  # shellcheck disable=SC1090
+  . "$CLIENT_CONF"
+  address="${SOCKS_ADDRESS:-}"
+  port="${SOCKS_PORT:-}"
+  username="${SOCKS_USERNAME:-}"
+  password="${SOCKS_PASSWORD:-}"
+  priority_mode="${PRIORITY_MODE:-$(current_priority_mode)}"
+  [ -n "$address" ] && [ -n "$port" ] || fatal "出口配置不完整，请先修改出口信息。"
+  write_client_conf "$mode" "$address" "$port" "$username" "$password" "$priority_mode"
+  write_tun_config
+  write_routes_scripts
+  write_tun_service "$mode"
+}
+
+restart_tun_mode() {
+  local mode="$1" snapshot
+  snapshot="$(snapshot_runtime_files)"
+  begin_runtime_rollback "$snapshot"
+  rewrite_tun_runtime_for_restart "$mode"
+  preflight_tun_runtime_with_rollback "$snapshot"
+  cleanup_rules
+  warn_ssh_protection_status
+  restart_tun_with_rollback "$snapshot" restart
+  systemctl enable getout-tun.service >/dev/null 2>&1 || true
+  systemctl disable getout-gost.service getout-wg.service >/dev/null 2>&1 || true
+  success "出口模式已重启。"
+}
+
+rewrite_wg_client_runtime_for_restart() {
+  local mode="$1"
+  [ -f "$CLIENT_CONF" ] || return 0
+  assert_private_config "$CLIENT_CONF"
+  # shellcheck disable=SC1090
+  . "$CLIENT_CONF"
+  [ "${TRANSPORT:-}" = "wireguard" ] || fatal "出口配置不是 WireGuard 模式。"
+  write_wg_config
+  write_routes_scripts
+  write_wg_service "$mode"
+}
+
+restart_wg_client_mode() {
+  local mode="$1" snapshot
+  snapshot="$(snapshot_runtime_files)"
+  begin_runtime_rollback "$snapshot"
+  rewrite_wg_client_runtime_for_restart "$mode"
+  preflight_wg_runtime_with_rollback "$snapshot"
+  cleanup_rules
+  warn_ssh_protection_status
+  restart_wg_with_rollback "$snapshot" restart
+  systemctl enable getout-wg.service >/dev/null 2>&1 || true
+  systemctl disable getout-gost.service getout-tun.service >/dev/null 2>&1 || true
+  success "WG 出口已重启。"
+}
+
 restart_getout() {
   require_root
   local mode_file_content
   mode_file_content="$(current_mode)"
-
   if server_active && [ "$mode_file_content" = "server" ]; then
-    local snapshot
-    ensure_conf_dir
-    snapshot="$(snapshot_server_files)"
-    begin_server_rollback "$snapshot"
-    [ -f "$SERVER_CONF" ] || fatal "未找到入口配置，请先修改入口信息。"
-    chmod_private_file "$SERVER_CONF"
-    write_gost_service
-    echo "server" > "$MODE_FILE"
-    chmod_private_file "$MODE_FILE"
-    restart_gost_with_rollback "$snapshot" restart
-    systemctl enable getout-gost.service >/dev/null 2>&1 || true
-    systemctl disable getout-tun.service getout-wg.service >/dev/null 2>&1 || true
-    success "入口已重启。"
-    status
+    restart_server_mode
   elif wg_server_active && [ "$mode_file_content" = "wg-server" ]; then
-    local snapshot
-    ensure_conf_dir
-    snapshot="$(snapshot_server_files)"
-    begin_server_rollback "$snapshot"
-    [ -f "$SERVER_CONF" ] || fatal "未找到入口配置，请先修改入口信息。"
-    assert_private_config "$SERVER_CONF"
-    # shellcheck disable=SC1090
-    . "$SERVER_CONF"
-    [ "${SERVER_MODE:-}" = "wireguard" ] || fatal "入口配置不是 WireGuard 模式。"
-    write_wg_server_service
-    # 清理可能残留的接口
-    if ip link show getout-wg0 &>/dev/null; then
-      wg-quick down "$WG_CONF" 2>/dev/null || ip link del getout-wg0 2>/dev/null || true
-    fi
-    systemctl restart getout-wg.service
-    sleep 2
-    if ! systemctl is-active --quiet getout-wg.service; then
-      restore_server_or_warn "$snapshot"
-      fatal "getout-wg.service 启动失败，请查看：journalctl -u getout-wg.service -e"
-    fi
-    clear_runtime_rollback "$snapshot"
-    systemctl enable getout-wg.service >/dev/null 2>&1 || true
-    systemctl disable getout-gost.service getout-tun.service >/dev/null 2>&1 || true
-    success "入口 WireGuard 模式已重启。"
-    status
+    restart_wg_server_mode
   elif tun_active && [[ "$mode_file_content" =~ ^(v4|dual)$ ]]; then
-    local mode address port username password priority_mode snapshot
-    snapshot="$(snapshot_runtime_files)"
-    begin_runtime_rollback "$snapshot"
-    mode="$mode_file_content"
-    if [ -f "$CLIENT_CONF" ]; then
-      assert_private_config "$CLIENT_CONF"
-      # shellcheck disable=SC1090
-      . "$CLIENT_CONF"
-      address="${SOCKS_ADDRESS:-}"
-      port="${SOCKS_PORT:-}"
-      username="${SOCKS_USERNAME:-}"
-      password="${SOCKS_PASSWORD:-}"
-      priority_mode="${PRIORITY_MODE:-$(current_priority_mode)}"
-      [ -n "$address" ] && [ -n "$port" ] || fatal "出口配置不完整，请先修改出口信息。"
-      write_client_conf "$mode" "$address" "$port" "$username" "$password" "$priority_mode"
-      write_tun_config
-      write_routes_scripts
-      write_tun_service "$mode"
-      preflight_tun_runtime_with_rollback "$snapshot"
-    fi
-    cleanup_rules
-    warn_ssh_protection_status
-    restart_tun_with_rollback "$snapshot" restart
-    systemctl enable getout-tun.service >/dev/null 2>&1 || true
-    systemctl disable getout-gost.service getout-wg.service >/dev/null 2>&1 || true
-    success "出口模式已重启。"
-    status
+    restart_tun_mode "$mode_file_content"
   elif wg_client_active && [[ "$mode_file_content" =~ ^wg- ]]; then
-    local mode snapshot
-    snapshot="$(snapshot_runtime_files)"
-    begin_runtime_rollback "$snapshot"
-    mode="$mode_file_content"
-    if [ -f "$CLIENT_CONF" ]; then
-      assert_private_config "$CLIENT_CONF"
-      # shellcheck disable=SC1090
-      . "$CLIENT_CONF"
-      [ "${TRANSPORT:-}" = "wireguard" ] || fatal "出口配置不是 WireGuard 模式。"
-      write_wg_config
-      write_routes_scripts
-      write_wg_service "$mode"
-      preflight_wg_runtime_with_rollback "$snapshot"
-    fi
-    cleanup_rules
-    warn_ssh_protection_status
-    restart_wg_with_rollback "$snapshot" restart
-    systemctl enable getout-wg.service >/dev/null 2>&1 || true
-    systemctl disable getout-gost.service getout-tun.service >/dev/null 2>&1 || true
-    success "WG 出口已重启。"
-    status
+    restart_wg_client_mode "$mode_file_content"
   else
     warn "当前 getout 未运行，请选择 1/3/4/5/6 启动。"
+    return 0
   fi
+  status
 }
 
 uninstall_all() {

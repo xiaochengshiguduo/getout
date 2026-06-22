@@ -185,7 +185,7 @@ prompt_wg_server_info() {
   # 只询问端口
   read -rp "端口 [默认: ${DEFAULT_WG_PORT}]: " listen_port
   listen_port="${listen_port:-$DEFAULT_WG_PORT}"
-  [[ "$listen_port" =~ ^[0-9]+$ ]] && [ "$listen_port" -ge 1 ] && [ "$listen_port" -le 65535 ] || fatal "端口无效：$listen_port"
+  require_valid_port "端口" "$listen_port"
 
   # 固定参数（无需询问）
   local listen_addr="::"
@@ -222,33 +222,33 @@ prompt_wg_server_info() {
   chmod_private_file "$SERVER_CONF"
 }
 
-write_wg_server_service() {
-  [ -f "$SERVER_CONF" ] || fatal "未找到入口配置，请先修改入口信息。"
-  assert_private_config "$SERVER_CONF"
-  # shellcheck disable=SC1090
-  . "$SERVER_CONF"
+validate_wg_server_conf() {
   [ -n "${LISTEN_PORT:-}" ] || fatal "入口配置缺少 LISTEN_PORT。"
   [ -n "${ADDRESS:-}" ] || fatal "入口配置缺少 ADDRESS。"
   [ -n "${PRIVATE_KEY:-}" ] || fatal "入口配置缺少 PRIVATE_KEY。"
   [ -n "${PEER_PUBLIC_KEY:-}" ] || fatal "入口配置缺少 PEER_PUBLIC_KEY。"
+  require_valid_port "LISTEN_PORT" "$LISTEN_PORT"
+  require_valid_cidr_list "ADDRESS" "$ADDRESS"
+  require_valid_wg_key "PRIVATE_KEY" "$PRIVATE_KEY"
+  require_valid_wg_key "PEER_PUBLIC_KEY" "$PEER_PUBLIC_KEY"
+  [ -z "${ALLOWED_IPS:-}" ] || require_valid_cidr_list "ALLOWED_IPS" "$ALLOWED_IPS"
+}
 
-  local listen_addr="${LISTEN_ADDRESS:-::}"
-  local peer_allowed
+wg_server_peer_allowed() {
   if [ -n "${ALLOWED_IPS:-}" ]; then
-    peer_allowed="$ALLOWED_IPS"
-  else
-    # 兼容旧配置：从 ADDRESS 提取 IPv4 部分推导 AllowedIPs
-    local addr_v4="${ADDRESS%%,*}"
-    addr_v4="${addr_v4// /}"
-    peer_allowed="${addr_v4%.*}.2/32,${DEFAULT_WG_V6_ADDRESS%%::*}::2/128"
+    printf '%s\n' "$ALLOWED_IPS"
+    return 0
   fi
+  local addr_v4="${ADDRESS%%,*}"
+  addr_v4="${addr_v4// /}"
+  printf '%s\n' "${addr_v4%.*}.2/32,${DEFAULT_WG_V6_ADDRESS%%::*}::2/128"
+}
 
-  # 从 ADDRESS 提取子网并生成 NAT 规则
-  local nat_up="" nat_down=""
-  local v4_net="" v6_net=""
-  local addr_part
-  for addr_part in ${ADDRESS//,/ }; do
-    addr_part="${addr_part// /}"
+wg_server_nat_lines() {
+  local v4_net="" v6_net="" addr_part
+  IFS=',' read -r -a _wg_addr_parts <<< "$ADDRESS"
+  for addr_part in "${_wg_addr_parts[@]}"; do
+    addr_part="${addr_part//[[:space:]]/}"
     [ -n "$addr_part" ] || continue
     if is_ipv6 "${addr_part%%/*}"; then
       v6_net="$(get_v6_network "$addr_part")"
@@ -256,49 +256,53 @@ write_wg_server_service() {
       v4_net="$(get_v4_network "$addr_part")"
     fi
   done
-  [ -n "$v4_net" ] && {
-    nat_up+="PostUp = iptables -t nat -A POSTROUTING -s $v4_net ! -o %i -j MASQUERADE\n"
-    nat_up+="PostUp = iptables -A FORWARD -i %i -j ACCEPT\n"
-    nat_up+="PostUp = iptables -A FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT\n"
-    nat_down+="PostDown = iptables -t nat -D POSTROUTING -s $v4_net ! -o %i -j MASQUERADE\n"
-    nat_down+="PostDown = iptables -D FORWARD -i %i -j ACCEPT\n"
-    nat_down+="PostDown = iptables -D FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT\n"
-  }
-  [ -n "$v6_net" ] && command -v ip6tables >/dev/null 2>&1 && {
-    nat_up+="PostUp = ip6tables -t nat -A POSTROUTING -s $v6_net ! -o %i -j MASQUERADE\n"
-    nat_up+="PostUp = ip6tables -A FORWARD -i %i -j ACCEPT\n"
-    nat_up+="PostUp = ip6tables -A FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT\n"
-    nat_down+="PostDown = ip6tables -t nat -D POSTROUTING -s $v6_net ! -o %i -j MASQUERADE\n"
-    nat_down+="PostDown = ip6tables -D FORWARD -i %i -j ACCEPT\n"
-    nat_down+="PostDown = ip6tables -D FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT\n"
-  }
+  if [ -n "$v4_net" ]; then
+    printf 'PostUp = iptables -t nat -A POSTROUTING -s %s ! -o %%i -j MASQUERADE\n' "$v4_net"
+    printf 'PostUp = iptables -A FORWARD -i %%i -j ACCEPT\n'
+    printf 'PostUp = iptables -A FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT\n'
+    printf 'PostDown = iptables -t nat -D POSTROUTING -s %s ! -o %%i -j MASQUERADE\n' "$v4_net"
+    printf 'PostDown = iptables -D FORWARD -i %%i -j ACCEPT\n'
+    printf 'PostDown = iptables -D FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT\n'
+  fi
+  if [ -n "$v6_net" ] && command -v ip6tables >/dev/null 2>&1; then
+    printf 'PostUp = ip6tables -t nat -A POSTROUTING -s %s ! -o %%i -j MASQUERADE\n' "$v6_net"
+    printf 'PostUp = ip6tables -A FORWARD -i %%i -j ACCEPT\n'
+    printf 'PostUp = ip6tables -A FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT\n'
+    printf 'PostDown = ip6tables -t nat -D POSTROUTING -s %s ! -o %%i -j MASQUERADE\n' "$v6_net"
+    printf 'PostDown = ip6tables -D FORWARD -i %%i -j ACCEPT\n'
+    printf 'PostDown = ip6tables -D FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT\n'
+  fi
+}
 
-  # 写入 WireGuard 配置文件
+write_wg_server_conf_file() {
+  local peer_allowed
+  peer_allowed="$(wg_server_peer_allowed)"
   cat > "$WG_CONF" <<EOF
 [Interface]
 Address = ${ADDRESS}
 ListenPort = ${LISTEN_PORT}
 PrivateKey = ${PRIVATE_KEY}
-$(echo -e "$nat_up$nat_down")
+$(wg_server_nat_lines)
 [Peer]
 PublicKey = ${PEER_PUBLIC_KEY}
 AllowedIPs = ${peer_allowed}
 EOF
   chmod_private_file "$WG_CONF"
+}
 
-  # 写入 systemd service
+write_wg_systemd_service() {
+  local description="$1"
+  local pre_start="${2:-}"
   cat > "$WG_SERVICE" <<EOF
 [Unit]
-Description=Getout WireGuard Server
+Description=$description
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStartPre=/sbin/sysctl -w net.ipv4.ip_forward=1
-ExecStartPre=/sbin/sysctl -w net.ipv6.conf.all.forwarding=1
-ExecStart=/usr/bin/wg-quick up $WG_CONF
+${pre_start}ExecStart=/usr/bin/wg-quick up $WG_CONF
 ExecStop=/usr/bin/wg-quick down $WG_CONF
 ExecStopPost=/usr/bin/wg-quick down $WG_CONF 2>/dev/null || true
 
@@ -307,6 +311,17 @@ WantedBy=multi-user.target
 EOF
   chmod_private_file "$WG_SERVICE"
   systemctl daemon-reload
+}
+
+write_wg_server_service() {
+  [ -f "$SERVER_CONF" ] || fatal "未找到入口配置，请先修改入口信息。"
+  assert_private_config "$SERVER_CONF"
+  # shellcheck disable=SC1090
+  . "$SERVER_CONF"
+  validate_wg_server_conf
+  write_wg_server_conf_file
+  write_wg_systemd_service "Getout WireGuard Server" \
+    $'ExecStartPre=/sbin/sysctl -w net.ipv4.ip_forward=1\nExecStartPre=/sbin/sysctl -w net.ipv6.conf.all.forwarding=1\n'
 }
 
 start_wg_server() {

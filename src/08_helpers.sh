@@ -87,6 +87,75 @@ get_v6_network() {
   fi
 }
 
+
+valid_port() { [[ "${1:-}" =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]; }
+valid_wg_key() { [[ "${1:-}" =~ ^[A-Za-z0-9+/]{43}=$ ]]; }
+valid_ipv4_addr() {
+  local a b c d
+  [[ "${1:-}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+  IFS=. read -r a b c d <<< "$1"
+  [ "$a" -le 255 ] && [ "$b" -le 255 ] && [ "$c" -le 255 ] && [ "$d" -le 255 ]
+}
+valid_cidr() {
+  local cidr="${1:-}" addr prefix
+  [[ "$cidr" == */* ]] || return 1
+  addr="${cidr%%/*}"; prefix="${cidr##*/}"
+  [[ "$prefix" =~ ^[0-9]+$ ]] || return 1
+  if is_ipv6 "$addr"; then
+    [ "$prefix" -ge 0 ] && [ "$prefix" -le 128 ] && [[ "$addr" =~ ^[0-9A-Fa-f:.]+$ ]]
+  else
+    valid_ipv4_addr "$addr" && [ "$prefix" -ge 0 ] && [ "$prefix" -le 32 ]
+  fi
+}
+valid_cidr_list() {
+  local value="${1:-}" item
+  local -a _cidrs
+  [ -n "$value" ] || return 1
+  [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || return 1
+  IFS=',' read -r -a _cidrs <<< "$value"
+  for item in "${_cidrs[@]}"; do
+    item="${item//[[:space:]]/}"
+    [ -n "$item" ] && valid_cidr "$item" || return 1
+  done
+}
+valid_dns_list() {
+  local value="${1:-}" item
+  local -a _dns_items
+  [ -n "$value" ] || return 0
+  [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || return 1
+  IFS=',' read -r -a _dns_items <<< "$value"
+  for item in "${_dns_items[@]}"; do
+    item="${item//[[:space:]]/}"
+    [ -n "$item" ] || return 1
+    [[ "$item" != *$'\n'* && "$item" != *$'\r'* && "$item" != *'='* ]] || return 1
+    if is_ipv6 "$item" || valid_ipv4_addr "$item"; then
+      continue
+    fi
+    [[ "$item" =~ ^[A-Za-z0-9.-]+$ ]] || return 1
+  done
+}
+valid_endpoint_host() {
+  local host="${1:-}"
+  [ -n "$host" ] || return 1
+  [[ "$host" != *$'\n'* && "$host" != *$'\r'* && "$host" != *[[:space:]]* ]] || return 1
+  [[ "$host" != *'['* && "$host" != *']'* && "$host" != *'/'* && "$host" != *'%'* ]] || return 1
+  if is_ipv6 "$host" || valid_ipv4_addr "$host"; then
+    return 0
+  fi
+  [[ "$host" =~ ^[A-Za-z0-9.-]+$ ]]
+}
+format_endpoint_host() {
+  local host
+  host="$(strip_brackets "$1")"
+  valid_endpoint_host "$host" || fatal "Endpoint 地址无效：$1"
+  if is_ipv6 "$host"; then printf '[%s]' "$host"; else printf '%s' "$host"; fi
+}
+require_valid_wg_key() { valid_wg_key "$2" || fatal "$1 无效。"; }
+require_valid_port() { valid_port "$2" || fatal "$1 无效：$2"; }
+require_valid_cidr_list() { valid_cidr_list "$2" || fatal "$1 无效：$2"; }
+require_valid_dns_list() { valid_dns_list "$2" || fatal "$1 无效：$2"; }
+
+
 main_ipv4() {
   ip -4 route get 1.1.1.1 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}' || true
 }

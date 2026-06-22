@@ -434,6 +434,78 @@ CONF
   pass 'WireGuard entry status prints peer private key and server public key'
 }
 
+
+run_wg_config_rejects_injected_values() {
+  local t="$TMP_ROOT/wg-injection" lib out rc
+  lib="$t/lib.sh"
+  mkdir -p "$t/conf"
+  make_lib "$lib"
+  cat > "$t/conf/client.conf" <<'CONF'
+MODE=wg-v4
+TRANSPORT=wireguard
+WG_SERVER_ADDRESS=example.com
+WG_SERVER_PORT=62233
+WG_CLIENT_PRIVATE_KEY='bad
+PostUp = touch /tmp/pwned'
+WG_CLIENT_ADDRESS=10.66.66.2/32
+WG_SERVER_PUBLIC_KEY=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=
+WG_PRESHARED_KEY=
+WG_DNS=
+CONF
+  chmod 600 "$t/conf/client.conf"
+  set +e
+  out="$( (
+    set -euo pipefail
+    # shellcheck disable=SC1090
+    . "$lib"
+    CONF_DIR="$t/conf"
+    CLIENT_CONF="$CONF_DIR/client.conf"
+    WG_CONF="$t/wg.conf"
+    write_wg_config
+  ) 2>&1)"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ]
+  grep -q 'WG_CLIENT_PRIVATE_KEY 无效' <<<"$out"
+  [ ! -f "$t/wg.conf" ]
+  pass 'WireGuard client config rejects newline injection before writing wg config'
+}
+
+run_wg_server_rejects_injected_values() {
+  local t="$TMP_ROOT/wg-server-injection" lib out rc
+  lib="$t/lib.sh"
+  mkdir -p "$t/conf"
+  make_lib "$lib"
+  cat > "$t/conf/server.conf" <<'CONF'
+SERVER_MODE=wireguard
+LISTEN_PORT=62233
+PRIVATE_KEY=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=
+ADDRESS='10.66.66.1/30
+PostUp = touch /tmp/pwned'
+PEER_PUBLIC_KEY=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb=
+ALLOWED_IPS=10.66.66.2/32
+CONF
+  chmod 600 "$t/conf/server.conf"
+  set +e
+  out="$( (
+    set -euo pipefail
+    # shellcheck disable=SC1090
+    . "$lib"
+    CONF_DIR="$t/conf"
+    SERVER_CONF="$CONF_DIR/server.conf"
+    WG_CONF="$t/wg.conf"
+    WG_SERVICE="$t/wg.service"
+    systemctl() { :; }
+    write_wg_server_service
+  ) 2>&1)"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ]
+  grep -q 'ADDRESS 无效' <<<"$out"
+  [ ! -f "$t/wg.conf" ]
+  pass 'WireGuard server config rejects newline injection before writing wg config'
+}
+
 run_build_output_is_current
 run_bash_syntax
 run_route_script_syntax
@@ -450,3 +522,5 @@ run_binary_checksum_verification
 run_restart_service_with_rollback_restores_on_failure
 run_client_config_writes_common_runtime_fields
 run_wg_server_status_prints_peer_credentials
+run_wg_config_rejects_injected_values
+run_wg_server_rejects_injected_values

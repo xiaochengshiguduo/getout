@@ -39,7 +39,7 @@ write_runtime_common_conf() {
   local ssh_ip ssh_ports v4 v6 runtime_dns
   case "$priority_mode" in v4|v6) ;; *) priority_mode="$(current_priority_mode)" ;; esac
   ssh_ip="$(ssh_remote_ip || true)"
-  ssh_ports="$(ssh_listen_ports | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+  ssh_ports="$(ssh_listen_ports 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//' || true)"
   v4="$(main_ipv4 || true)"
   v6="$(main_ipv6 || true)"
   runtime_dns="$(runtime_dns_servers_text "$priority_mode")"
@@ -123,7 +123,7 @@ ask_wg_config() {
 
   read -rp "端口 [默认: ${DEFAULT_WG_PORT}]: " server_port
   server_port="${server_port:-$DEFAULT_WG_PORT}"
-  [[ "$server_port" =~ ^[0-9]+$ ]] && [ "$server_port" -ge 1 ] && [ "$server_port" -le 65535 ] || fatal "端口无效：$server_port"
+  require_valid_port "端口" "$server_port"
 
   read -rp "私钥: " client_private_key
   [ -n "$client_private_key" ] || fatal "客户端私钥不能为空。"
@@ -185,6 +185,14 @@ write_wg_config() {
   # shellcheck disable=SC1090
   . "$CLIENT_CONF"
   [ "${TRANSPORT:-}" = "wireguard" ] || return 1
+  require_valid_wg_key "WG_CLIENT_PRIVATE_KEY" "${WG_CLIENT_PRIVATE_KEY:-}"
+  require_valid_wg_key "WG_SERVER_PUBLIC_KEY" "${WG_SERVER_PUBLIC_KEY:-}"
+  [ -z "${WG_PRESHARED_KEY:-}" ] || require_valid_wg_key "WG_PRESHARED_KEY" "$WG_PRESHARED_KEY"
+  require_valid_cidr_list "WG_CLIENT_ADDRESS" "${WG_CLIENT_ADDRESS:-$(default_wg_addr "${MODE:-wg-v4}")}"
+  require_valid_dns_list "WG_DNS" "${WG_DNS:-$DEFAULT_WG_DNS}"
+  require_valid_port "WG_SERVER_PORT" "${WG_SERVER_PORT:-}"
+  local endpoint_host
+  endpoint_host="$(format_endpoint_host "${WG_SERVER_ADDRESS:-}")"
 
   local iface="${TUN_NAME:-getout-${WG_IFACE}}"
   cat > "$WG_CONF" <<EOF
@@ -197,7 +205,7 @@ Table = off
 [Peer]
 PublicKey = ${WG_SERVER_PUBLIC_KEY}
 $(if [ -n "${WG_PRESHARED_KEY:-}" ]; then echo "PresharedKey = ${WG_PRESHARED_KEY}"; fi)
-Endpoint = [${WG_SERVER_ADDRESS}]:${WG_SERVER_PORT}
+Endpoint = ${endpoint_host}:${WG_SERVER_PORT}
 AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 25
 EOF
@@ -464,24 +472,32 @@ priority_action_label() {
   esac
 }
 
-switch_priority_mode() {
-  require_root; require_debian; install_deps
-  [ -f "$CLIENT_CONF" ] || fatal "未找到出口配置，请先修改出口信息。"
-  local mode transport snapshot was_active priority_mode
-  assert_private_config "$CLIENT_CONF"
-  # shellcheck disable=SC1090
-  . "$CLIENT_CONF"
-  transport="${TRANSPORT:-socks5}"
-  snapshot="$(snapshot_runtime_files)"
-  begin_runtime_rollback "$snapshot"
+next_priority_mode() {
+  case "$(current_priority_mode)" in
+    v4) echo v6 ;;
+    *) echo v4 ;;
+  esac
+}
+
+rewrite_wg_client_priority_conf() {
+  local priority_mode="$1" mode="${MODE:-wg-v4}"
+  write_wg_client_conf "$mode" "$WG_SERVER_ADDRESS" "$WG_SERVER_PORT" "$WG_CLIENT_PRIVATE_KEY" \
+    "${WG_CLIENT_ADDRESS:-$(default_wg_addr "$mode")}" "$WG_SERVER_PUBLIC_KEY" \
+    "${WG_PRESHARED_KEY:-}" "${WG_DNS:-$DEFAULT_WG_DNS}" "$priority_mode"
+}
+
+rewrite_socks_client_priority_conf() {
+  local priority_mode="$1" mode="${MODE:-v4}"
+  local address="${SOCKS_ADDRESS:-}" port="${SOCKS_PORT:-}" username="${SOCKS_USERNAME:-}" password="${SOCKS_PASSWORD:-}"
+  [ -n "$address" ] && [ -n "$port" ] || fatal "出口配置不完整，请先修改出口信息。"
+  write_client_conf "$mode" "$address" "$port" "$username" "$password" "$priority_mode"
+}
+
+apply_client_priority_runtime() {
+  local transport="$1" snapshot="$2" was_active=0 mode
   if [ "$transport" = "wireguard" ]; then
-    was_active=0; wg_client_active && was_active=1
+    wg_client_active && was_active=1
     mode="${MODE:-wg-v4}"
-    case "$(current_priority_mode)" in
-      v4) priority_mode="v6" ;;
-      *) priority_mode="v4" ;;
-    esac
-    write_wg_client_conf "$mode" "$WG_SERVER_ADDRESS" "$WG_SERVER_PORT" "$WG_CLIENT_PRIVATE_KEY" "${WG_CLIENT_ADDRESS:-$(default_wg_addr "$mode")}" "$WG_SERVER_PUBLIC_KEY" "${WG_PRESHARED_KEY:-}" "${WG_DNS:-$DEFAULT_WG_DNS}" "$priority_mode"
     write_wg_config
     write_routes_scripts
     write_wg_service "$mode"
@@ -495,15 +511,8 @@ switch_priority_mode() {
       clear_runtime_rollback "$snapshot"
     fi
   else
-    was_active=0; tun_active && was_active=1
+    tun_active && was_active=1
     mode="${MODE:-v4}"
-    local address="${SOCKS_ADDRESS:-}" port="${SOCKS_PORT:-}" username="${SOCKS_USERNAME:-}" password="${SOCKS_PASSWORD:-}"
-    [ -n "$address" ] && [ -n "$port" ] || fatal "出口配置不完整，请先修改出口信息。"
-    case "$(current_priority_mode)" in
-      v4) priority_mode="v6" ;;
-      *) priority_mode="v4" ;;
-    esac
-    write_client_conf "$mode" "$address" "$port" "$username" "$password" "$priority_mode"
     write_tun_config
     write_routes_scripts
     write_tun_service "$mode"
@@ -517,10 +526,30 @@ switch_priority_mode() {
       clear_runtime_rollback "$snapshot"
     fi
   fi
+}
+
+switch_priority_mode() {
+  require_root; require_debian; install_deps
+  [ -f "$CLIENT_CONF" ] || fatal "未找到出口配置，请先修改出口信息。"
+  local transport snapshot priority_mode
+  assert_private_config "$CLIENT_CONF"
+  # shellcheck disable=SC1090
+  . "$CLIENT_CONF"
+  transport="${TRANSPORT:-socks5}"
+  priority_mode="$(next_priority_mode)"
+  snapshot="$(snapshot_runtime_files)"
+  begin_runtime_rollback "$snapshot"
+  if [ "$transport" = "wireguard" ]; then
+    rewrite_wg_client_priority_conf "$priority_mode"
+  else
+    rewrite_socks_client_priority_conf "$priority_mode"
+  fi
+  # shellcheck disable=SC1090
+  . "$CLIENT_CONF"
+  apply_client_priority_runtime "$transport" "$snapshot"
   case "$priority_mode" in
     v4) success "已切换至 V4 优先模式。" ;;
     v6) success "已切换至 V6 优先模式。" ;;
   esac
   status
 }
-

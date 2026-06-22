@@ -6,105 +6,128 @@ cleanup_rules() {
   restore_managed_files_fallback
 }
 
+restart_server_mode() {
+  local snapshot
+  ensure_conf_dir
+  snapshot="$(snapshot_server_files)"
+  begin_server_rollback "$snapshot"
+  [ -f "$SERVER_CONF" ] || fatal "未找到入口配置，请先修改入口信息。"
+  chmod_private_file "$SERVER_CONF"
+  write_gost_service
+  echo "server" > "$MODE_FILE"
+  chmod_private_file "$MODE_FILE"
+  restart_gost_with_rollback "$snapshot" restart
+  systemctl enable getout-gost.service >/dev/null 2>&1 || true
+  systemctl disable getout-tun.service getout-wg.service >/dev/null 2>&1 || true
+  success "入口已重启。"
+}
+
+restart_wg_server_mode() {
+  local snapshot
+  ensure_conf_dir
+  snapshot="$(snapshot_server_files)"
+  begin_server_rollback "$snapshot"
+  [ -f "$SERVER_CONF" ] || fatal "未找到入口配置，请先修改入口信息。"
+  assert_private_config "$SERVER_CONF"
+  # shellcheck disable=SC1090
+  . "$SERVER_CONF"
+  [ "${SERVER_MODE:-}" = "wireguard" ] || fatal "入口配置不是 WireGuard 模式。"
+  write_wg_server_service
+  if ip link show getout-wg0 &>/dev/null; then
+    wg-quick down "$WG_CONF" 2>/dev/null || ip link del getout-wg0 2>/dev/null || true
+  fi
+  restart_gw_service_with_server_rollback "$snapshot"
+  systemctl enable getout-wg.service >/dev/null 2>&1 || true
+  systemctl disable getout-gost.service getout-tun.service >/dev/null 2>&1 || true
+  success "入口 WireGuard 模式已重启。"
+}
+
+restart_gw_service_with_server_rollback() {
+  local snapshot="$1"
+  systemctl restart getout-wg.service
+  sleep 2
+  if ! systemctl is-active --quiet getout-wg.service; then
+    restore_server_or_warn "$snapshot"
+    fatal "getout-wg.service 启动失败，请查看：journalctl -u getout-wg.service -e"
+  fi
+  clear_runtime_rollback "$snapshot"
+}
+
+rewrite_tun_runtime_for_restart() {
+  local mode="$1" address port username password priority_mode
+  [ -f "$CLIENT_CONF" ] || return 0
+  assert_private_config "$CLIENT_CONF"
+  # shellcheck disable=SC1090
+  . "$CLIENT_CONF"
+  address="${SOCKS_ADDRESS:-}"
+  port="${SOCKS_PORT:-}"
+  username="${SOCKS_USERNAME:-}"
+  password="${SOCKS_PASSWORD:-}"
+  priority_mode="${PRIORITY_MODE:-$(current_priority_mode)}"
+  [ -n "$address" ] && [ -n "$port" ] || fatal "出口配置不完整，请先修改出口信息。"
+  write_client_conf "$mode" "$address" "$port" "$username" "$password" "$priority_mode"
+  write_tun_config
+  write_routes_scripts
+  write_tun_service "$mode"
+}
+
+restart_tun_mode() {
+  local mode="$1" snapshot
+  snapshot="$(snapshot_runtime_files)"
+  begin_runtime_rollback "$snapshot"
+  rewrite_tun_runtime_for_restart "$mode"
+  preflight_tun_runtime_with_rollback "$snapshot"
+  cleanup_rules
+  warn_ssh_protection_status
+  restart_tun_with_rollback "$snapshot" restart
+  systemctl enable getout-tun.service >/dev/null 2>&1 || true
+  systemctl disable getout-gost.service getout-wg.service >/dev/null 2>&1 || true
+  success "出口模式已重启。"
+}
+
+rewrite_wg_client_runtime_for_restart() {
+  local mode="$1"
+  [ -f "$CLIENT_CONF" ] || return 0
+  assert_private_config "$CLIENT_CONF"
+  # shellcheck disable=SC1090
+  . "$CLIENT_CONF"
+  [ "${TRANSPORT:-}" = "wireguard" ] || fatal "出口配置不是 WireGuard 模式。"
+  write_wg_config
+  write_routes_scripts
+  write_wg_service "$mode"
+}
+
+restart_wg_client_mode() {
+  local mode="$1" snapshot
+  snapshot="$(snapshot_runtime_files)"
+  begin_runtime_rollback "$snapshot"
+  rewrite_wg_client_runtime_for_restart "$mode"
+  preflight_wg_runtime_with_rollback "$snapshot"
+  cleanup_rules
+  warn_ssh_protection_status
+  restart_wg_with_rollback "$snapshot" restart
+  systemctl enable getout-wg.service >/dev/null 2>&1 || true
+  systemctl disable getout-gost.service getout-tun.service >/dev/null 2>&1 || true
+  success "WG 出口已重启。"
+}
+
 restart_getout() {
   require_root
   local mode_file_content
   mode_file_content="$(current_mode)"
-
   if server_active && [ "$mode_file_content" = "server" ]; then
-    local snapshot
-    ensure_conf_dir
-    snapshot="$(snapshot_server_files)"
-    begin_server_rollback "$snapshot"
-    [ -f "$SERVER_CONF" ] || fatal "未找到入口配置，请先修改入口信息。"
-    chmod_private_file "$SERVER_CONF"
-    write_gost_service
-    echo "server" > "$MODE_FILE"
-    chmod_private_file "$MODE_FILE"
-    restart_gost_with_rollback "$snapshot" restart
-    systemctl enable getout-gost.service >/dev/null 2>&1 || true
-    systemctl disable getout-tun.service getout-wg.service >/dev/null 2>&1 || true
-    success "入口已重启。"
-    status
+    restart_server_mode
   elif wg_server_active && [ "$mode_file_content" = "wg-server" ]; then
-    local snapshot
-    ensure_conf_dir
-    snapshot="$(snapshot_server_files)"
-    begin_server_rollback "$snapshot"
-    [ -f "$SERVER_CONF" ] || fatal "未找到入口配置，请先修改入口信息。"
-    assert_private_config "$SERVER_CONF"
-    # shellcheck disable=SC1090
-    . "$SERVER_CONF"
-    [ "${SERVER_MODE:-}" = "wireguard" ] || fatal "入口配置不是 WireGuard 模式。"
-    write_wg_server_service
-    # 清理可能残留的接口
-    if ip link show getout-wg0 &>/dev/null; then
-      wg-quick down "$WG_CONF" 2>/dev/null || ip link del getout-wg0 2>/dev/null || true
-    fi
-    systemctl restart getout-wg.service
-    sleep 2
-    if ! systemctl is-active --quiet getout-wg.service; then
-      restore_server_or_warn "$snapshot"
-      fatal "getout-wg.service 启动失败，请查看：journalctl -u getout-wg.service -e"
-    fi
-    clear_runtime_rollback "$snapshot"
-    systemctl enable getout-wg.service >/dev/null 2>&1 || true
-    systemctl disable getout-gost.service getout-tun.service >/dev/null 2>&1 || true
-    success "入口 WireGuard 模式已重启。"
-    status
+    restart_wg_server_mode
   elif tun_active && [[ "$mode_file_content" =~ ^(v4|dual)$ ]]; then
-    local mode address port username password priority_mode snapshot
-    snapshot="$(snapshot_runtime_files)"
-    begin_runtime_rollback "$snapshot"
-    mode="$mode_file_content"
-    if [ -f "$CLIENT_CONF" ]; then
-      assert_private_config "$CLIENT_CONF"
-      # shellcheck disable=SC1090
-      . "$CLIENT_CONF"
-      address="${SOCKS_ADDRESS:-}"
-      port="${SOCKS_PORT:-}"
-      username="${SOCKS_USERNAME:-}"
-      password="${SOCKS_PASSWORD:-}"
-      priority_mode="${PRIORITY_MODE:-$(current_priority_mode)}"
-      [ -n "$address" ] && [ -n "$port" ] || fatal "出口配置不完整，请先修改出口信息。"
-      write_client_conf "$mode" "$address" "$port" "$username" "$password" "$priority_mode"
-      write_tun_config
-      write_routes_scripts
-      write_tun_service "$mode"
-      preflight_tun_runtime_with_rollback "$snapshot"
-    fi
-    cleanup_rules
-    warn_ssh_protection_status
-    restart_tun_with_rollback "$snapshot" restart
-    systemctl enable getout-tun.service >/dev/null 2>&1 || true
-    systemctl disable getout-gost.service getout-wg.service >/dev/null 2>&1 || true
-    success "出口模式已重启。"
-    status
+    restart_tun_mode "$mode_file_content"
   elif wg_client_active && [[ "$mode_file_content" =~ ^wg- ]]; then
-    local mode snapshot
-    snapshot="$(snapshot_runtime_files)"
-    begin_runtime_rollback "$snapshot"
-    mode="$mode_file_content"
-    if [ -f "$CLIENT_CONF" ]; then
-      assert_private_config "$CLIENT_CONF"
-      # shellcheck disable=SC1090
-      . "$CLIENT_CONF"
-      [ "${TRANSPORT:-}" = "wireguard" ] || fatal "出口配置不是 WireGuard 模式。"
-      write_wg_config
-      write_routes_scripts
-      write_wg_service "$mode"
-      preflight_wg_runtime_with_rollback "$snapshot"
-    fi
-    cleanup_rules
-    warn_ssh_protection_status
-    restart_wg_with_rollback "$snapshot" restart
-    systemctl enable getout-wg.service >/dev/null 2>&1 || true
-    systemctl disable getout-gost.service getout-tun.service >/dev/null 2>&1 || true
-    success "WG 出口已重启。"
-    status
+    restart_wg_client_mode "$mode_file_content"
   else
     warn "当前 getout 未运行，请选择 1/3/4/5/6 启动。"
+    return 0
   fi
+  status
 }
 
 uninstall_all() {
