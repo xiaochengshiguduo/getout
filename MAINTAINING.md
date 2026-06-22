@@ -35,18 +35,18 @@ tests/
 
 - `00_prelude.sh`: shebang and shell options.
 - `01_constants.sh`: version, paths, URLs, DNS lists, routing marks, service names, and the release maintainer map.
-- `02_logging.sh`: log/fatal helpers.
+- `02_logging.sh`: log/fatal helpers and shared text UI/header helpers.
 - `03_update.sh`: self-install, update, downloads used by update, and SHA256 verification.
-- `04_config.sh`: config directory setup, private file permissions, safe config checks, and file metadata helpers.
+- `04_config.sh`: config directory setup, private file permissions, safe config checks, config loaders, and file metadata helpers.
 - `06_rollback.sh`: runtime/server snapshots and rollback trap guard.
 - `07_deps_downloads.sh`: Debian/root checks, apt deps, TUN checks, gost/tun2socks downloads.
 - `08_helpers.sh`: quoting, escaping, IP/address helpers, SSH detection, and main IP detection.
 - `09_runtime_safety.sh`: fallback cleanup, tun preflight, and restart-with-rollback wrappers.
 - `10_route_scripts.sh`: generation of `routes-up.sh` and `routes-down.sh`.
 - `11_server.sh`: entry/server mode service/config flows.
-- `12_client.sh`: outlet/client mode config, tun config/service, priority switching.
-- `13_lifecycle_status_doctor.sh`: cleanup, restart, uninstall, status, and doctor/check.
-- `14_cli.sh`: menu, usage, command dispatch, and `main "$@"`.
+- `12_client.sh`: outlet/client mode config, tun/WireGuard config rendering, services, and priority switching.
+- `13_lifecycle_status_doctor.sh`: cleanup, restart, uninstall, status, public-IP checks, and doctor/check.
+- `14_cli.sh`: menu rendering/handling, usage, command dispatch, and `main "$@"`.
 
 ## Rules for future changes
 
@@ -54,7 +54,9 @@ tests/
 - Run `./build.sh` after changing `src/*.sh`.
 - Keep committing generated `getout.sh` and `getout.sh.sha256`; they are part of the release surface.
 - If you add, remove, or rename a source module, update the `modules=(...)` list in `build.sh`. The build fails when `src/*.sh` contains an unlisted module, a listed module is missing, or a module appears twice.
-- Do not change `status` plaintext password output unless the project owner explicitly changes that design decision.
+- Do not change `status` plaintext password/key output unless the project owner explicitly changes that design decision.
+- Load `server.conf` / `client.conf` through `load_server_conf` / `load_client_conf` instead of open-coding `source` plus permission checks.
+- Keep generated route script changes conservative: `routes-down.sh` should prefer best-effort cleanup over failing early.
 - Prefer adding tests in `tests/run.sh` before or with behavior changes.
 - Keep `getout.sh` single-file install/update behavior intact unless the install/update flow is explicitly redesigned.
 
