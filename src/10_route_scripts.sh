@@ -108,10 +108,8 @@ ssh_ports_text() {
 }
 ensure_nftables() {
   command -v nft >/dev/null 2>&1 && return 0
-  echo "[信息] 正在安装 nftables..." >&2
-  apt-get update -y >/dev/null 2>&1 || return 1
-  apt-get install -y nftables >/dev/null 2>&1 || return 1
-  command -v nft >/dev/null 2>&1
+  echo "[警告] 未找到 nft，跳过入站回包保护；请先安装 nftables 后重启 getout。" >&2
+  return 1
 }
 add_ssh_port_rules() {
   local port

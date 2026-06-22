@@ -56,7 +56,8 @@ tests/
 - If you add, remove, or rename a source module, update the `modules=(...)` list in `build.sh`. The build fails when `src/*.sh` contains an unlisted module, a listed module is missing, or a module appears twice.
 - Do not change `status` plaintext password/key output unless the project owner explicitly changes that design decision.
 - Load `server.conf` / `client.conf` through `load_server_conf` / `load_client_conf` instead of open-coding `source` plus permission checks.
-- Keep generated route script changes conservative: `routes-down.sh` should prefer best-effort cleanup over failing early.
+- Treat `server.conf` / `client.conf` as trusted root-owned shell config, not untrusted data. Keep permission checks before sourcing them.
+- Keep generated route script changes conservative: `routes-down.sh` should prefer best-effort cleanup over failing early, and route scripts must not install packages during systemd startup.
 - Prefer adding tests in `tests/run.sh` before or with behavior changes.
 - Keep `getout.sh` single-file install/update behavior intact unless the install/update flow is explicitly redesigned.
 

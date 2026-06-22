@@ -89,7 +89,7 @@ ensure_global_command() {
 update_getout() {
   require_root
   install_from_update_url update
-  if service_active getout-tun.service || service_active getout-gost.service; then
+  if service_active getout-tun.service || service_active getout-gost.service || service_active getout-wg.service; then
     warn "getout 正在运行。需要重启才能刷新服务文件和路由脚本。"
     if [ -t 0 ]; then
       local yn

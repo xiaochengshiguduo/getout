@@ -194,7 +194,7 @@ ensure_global_command() {
 update_getout() {
   require_root
   install_from_update_url update
-  if service_active getout-tun.service || service_active getout-gost.service; then
+  if service_active getout-tun.service || service_active getout-gost.service || service_active getout-wg.service; then
     warn "getout 正在运行。需要重启才能刷新服务文件和路由脚本。"
     if [ -t 0 ]; then
       local yn
@@ -284,11 +284,11 @@ snapshot_files() {
 }
 
 snapshot_runtime_files() {
-  snapshot_files "$CLIENT_CONF" "$TUN_CONF" "$ROUTES_UP" "$ROUTES_DOWN" "$TUN_SERVICE" "$MODE_FILE"
+  snapshot_files "$CLIENT_CONF" "$TUN_CONF" "$WG_CONF" "$ROUTES_UP" "$ROUTES_DOWN" "$TUN_SERVICE" "$WG_SERVICE" "$MODE_FILE"
 }
 
 snapshot_server_files() {
-  snapshot_files "$SERVER_CONF" "$GOST_SERVICE" "$MODE_FILE"
+  snapshot_files "$SERVER_CONF" "$GOST_SERVICE" "$WG_CONF" "$WG_SERVICE" "$MODE_FILE"
 }
 
 restore_files() {
@@ -307,11 +307,11 @@ restore_files() {
 }
 
 restore_runtime_files() {
-  restore_files "$1" "$CLIENT_CONF" "$TUN_CONF" "$ROUTES_UP" "$ROUTES_DOWN" "$TUN_SERVICE" "$MODE_FILE"
+  restore_files "$1" "$CLIENT_CONF" "$TUN_CONF" "$WG_CONF" "$ROUTES_UP" "$ROUTES_DOWN" "$TUN_SERVICE" "$WG_SERVICE" "$MODE_FILE"
 }
 
 restore_server_files() {
-  restore_files "$1" "$SERVER_CONF" "$GOST_SERVICE" "$MODE_FILE"
+  restore_files "$1" "$SERVER_CONF" "$GOST_SERVICE" "$WG_CONF" "$WG_SERVICE" "$MODE_FILE"
 }
 
 remove_runtime_snapshot() {
@@ -352,9 +352,11 @@ secure_existing_files() {
   chmod_private_file "$SERVER_CONF"
   chmod_private_file "$CLIENT_CONF"
   chmod_private_file "$TUN_CONF"
+  chmod_private_file "$WG_CONF"
   chmod_private_file "$MODE_FILE"
   chmod_private_file "$GOST_SERVICE"
   chmod_private_file "$TUN_SERVICE"
+  chmod_private_file "$WG_SERVICE"
   [ -f "$ROUTES_UP" ] && chmod 700 "$ROUTES_UP" 2>/dev/null || true
   [ -f "$ROUTES_DOWN" ] && chmod 700 "$ROUTES_DOWN" 2>/dev/null || true
 }
@@ -972,10 +974,8 @@ ssh_ports_text() {
 }
 ensure_nftables() {
   command -v nft >/dev/null 2>&1 && return 0
-  echo "[信息] 正在安装 nftables..." >&2
-  apt-get update -y >/dev/null 2>&1 || return 1
-  apt-get install -y nftables >/dev/null 2>&1 || return 1
-  command -v nft >/dev/null 2>&1
+  echo "[警告] 未找到 nft，跳过入站回包保护；请先安装 nftables 后重启 getout。" >&2
+  return 1
 }
 add_ssh_port_rules() {
   local port
@@ -1539,7 +1539,7 @@ Type=oneshot
 RemainAfterExit=yes
 ${pre_start}ExecStart=/usr/bin/wg-quick up $WG_CONF
 ExecStop=/usr/bin/wg-quick down $WG_CONF
-ExecStopPost=/usr/bin/wg-quick down $WG_CONF 2>/dev/null || true
+ExecStopPost=/bin/sh -c '/usr/bin/wg-quick down "$1" 2>/dev/null || true' -- $WG_CONF
 
 [Install]
 WantedBy=multi-user.target
@@ -1819,7 +1819,9 @@ reuse_wg_client_config() {
   case "$mode" in
     wg-dual)
       # Ensure IPv6 address is present
-      [[ "$addr" == *"fd86:ea04:1115"* ]] || addr="$(default_wg_addr "$mode")"
+      local default_v6
+      default_v6="$(default_wg_client_v6_addr)"
+      [[ "$addr" == *"${default_v6%%/*}"* ]] || addr="$(default_wg_addr "$mode")"
       ;;
     wg-v4)
       # For v4-only, strip any IPv6 part
@@ -1866,7 +1868,6 @@ write_wg_config() {
 
 write_wg_service() {
   local mode="$1"
-  local iface="${TUN_NAME:-getout-${WG_IFACE}}"
   cat > "$WG_SERVICE" <<EOF
 [Unit]
 Description=Getout WireGuard Client ($mode)
@@ -1881,7 +1882,7 @@ ExecStart=/usr/bin/wg-quick up $WG_CONF
 ExecStartPost=/bin/sleep 1
 ExecStartPost=$ROUTES_UP
 ExecStop=$ROUTES_DOWN
-ExecStopPost=/usr/bin/wg-quick down $WG_CONF 2>/dev/null || true
+ExecStopPost=/bin/sh -c '/usr/bin/wg-quick down "$1" 2>/dev/null || true' -- $WG_CONF
 ExecStopPost=$ROUTES_DOWN
 
 [Install]

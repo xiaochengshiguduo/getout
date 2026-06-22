@@ -174,7 +174,9 @@ reuse_wg_client_config() {
   case "$mode" in
     wg-dual)
       # Ensure IPv6 address is present
-      [[ "$addr" == *"fd86:ea04:1115"* ]] || addr="$(default_wg_addr "$mode")"
+      local default_v6
+      default_v6="$(default_wg_client_v6_addr)"
+      [[ "$addr" == *"${default_v6%%/*}"* ]] || addr="$(default_wg_addr "$mode")"
       ;;
     wg-v4)
       # For v4-only, strip any IPv6 part
@@ -221,7 +223,6 @@ write_wg_config() {
 
 write_wg_service() {
   local mode="$1"
-  local iface="${TUN_NAME:-getout-${WG_IFACE}}"
   cat > "$WG_SERVICE" <<EOF
 [Unit]
 Description=Getout WireGuard Client ($mode)
@@ -236,7 +237,7 @@ ExecStart=/usr/bin/wg-quick up $WG_CONF
 ExecStartPost=/bin/sleep 1
 ExecStartPost=$ROUTES_UP
 ExecStop=$ROUTES_DOWN
-ExecStopPost=/usr/bin/wg-quick down $WG_CONF 2>/dev/null || true
+ExecStopPost=/bin/sh -c '/usr/bin/wg-quick down "$1" 2>/dev/null || true' -- $WG_CONF
 ExecStopPost=$ROUTES_DOWN
 
 [Install]
