@@ -121,7 +121,7 @@ restart_getout() {
     restart_wg_server_mode
   elif tun_active && [[ "$mode_file_content" =~ ^(v4|dual)$ ]]; then
     restart_tun_mode "$mode_file_content"
-  elif wg_client_active && [[ "$mode_file_content" =~ ^wg- ]]; then
+  elif wg_client_active && is_wg_client_mode "$mode_file_content"; then
     restart_wg_client_mode "$mode_file_content"
   else
     warn "当前 getout 未运行，请选择 1/3/4/5/6 启动。"

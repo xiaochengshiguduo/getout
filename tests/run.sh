@@ -506,6 +506,28 @@ CONF
   pass 'WireGuard server config rejects newline injection before writing wg config'
 }
 
+
+run_wg_server_mode_is_not_client_mode() {
+  local t="$TMP_ROOT/wg-mode" lib
+  lib="$t/lib.sh"
+  mkdir -p "$t/conf"
+  make_lib "$lib"
+  (
+    set -euo pipefail
+    # shellcheck disable=SC1090
+    . "$lib"
+    CONF_DIR="$t/conf"
+    MODE_FILE="$CONF_DIR/mode"
+    mkdir -p "$CONF_DIR"
+    echo wg-server > "$MODE_FILE"
+    systemctl() { [ "$1" = is-active ] && [ "${3:-}" = getout-wg.service ]; }
+    wg_server_active
+    ! wg_client_active
+    ! client_mode_active wg-server
+  )
+  pass 'wg-server mode is not treated as a WireGuard client mode'
+}
+
 run_build_output_is_current
 run_bash_syntax
 run_route_script_syntax
@@ -522,5 +544,6 @@ run_binary_checksum_verification
 run_restart_service_with_rollback_restores_on_failure
 run_client_config_writes_common_runtime_fields
 run_wg_server_status_prints_peer_credentials
+run_wg_server_mode_is_not_client_mode
 run_wg_config_rejects_injected_values
 run_wg_server_rejects_injected_values

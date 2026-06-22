@@ -17,14 +17,15 @@ current_mode() {
 server_active() { service_active getout-gost.service; }
 tun_active() { service_active getout-tun.service; }
 wg_server_active() { local mode; mode="$(current_mode)"; service_active getout-wg.service && [ "$mode" = "wg-server" ]; }
+is_wg_client_mode() { [ "$1" = "wg-v4" ] || [ "$1" = "wg-dual" ]; }
 wg_client_active() {
   local mode="$(current_mode)"
-  service_active getout-wg.service && [[ "$mode" =~ ^wg- ]]
+  service_active getout-wg.service && is_wg_client_mode "$mode"
 }
 any_client_active() { tun_active || wg_client_active; }
 client_mode_active() {
   local mode="$(current_mode)"
-  if [[ "$mode" =~ ^wg- ]]; then
+  if is_wg_client_mode "$mode"; then
     wg_client_active && [ "$mode" = "$1" ]
   else
     tun_active && [ "$mode" = "$1" ]
@@ -39,7 +40,7 @@ stop_server_keep_config() {
 stop_client_keep_config() {
   local mode
   mode="$(current_mode)"
-  if [[ "$mode" =~ ^wg- ]]; then
+  if is_wg_client_mode "$mode"; then
     systemctl stop getout-wg.service 2>/dev/null || true
     # 服务可能处于 failed 状态，systemctl stop 不执行 ExecStopPost
     # 手动清理 WireGuard 接口作为兜底
