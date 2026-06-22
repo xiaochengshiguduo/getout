@@ -45,3 +45,16 @@ write_file_meta() {
   chmod_private_file "$meta"
 }
 
+
+
+load_server_conf() {
+  assert_private_config "$SERVER_CONF"
+  # shellcheck disable=SC1090
+  . "$SERVER_CONF"
+}
+
+load_client_conf() {
+  assert_private_config "$CLIENT_CONF"
+  # shellcheck disable=SC1090
+  . "$CLIENT_CONF"
+}

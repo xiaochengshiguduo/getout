@@ -97,9 +97,7 @@ prompt_server_info() {
 
 write_gost_service() {
   [ -f "$SERVER_CONF" ] || fatal "未找到入口配置，请先修改入口信息。"
-  assert_private_config "$SERVER_CONF"
-  # shellcheck disable=SC1090
-  . "$SERVER_CONF"
+  load_server_conf
   local auth listen
   auth=""
   [ -n "${USERNAME:-}" ] && [ -n "${PASSWORD:-}" ] || fatal "入口必须配置用户名密码，请先修改入口信息。"
@@ -140,9 +138,7 @@ start_server() {
   echo "server" > "$MODE_FILE"
   chmod_private_file "$MODE_FILE"
   restart_gost_with_rollback "$snapshot" enable
-  assert_private_config "$SERVER_CONF"
-  # shellcheck disable=SC1090
-  . "$SERVER_CONF"
+  load_server_conf
   maybe_allow_ufw "$PORT" tcp
   success "入口已启动。"
   status
@@ -311,9 +307,7 @@ EOF
 
 write_wg_server_service() {
   [ -f "$SERVER_CONF" ] || fatal "未找到入口配置，请先修改入口信息。"
-  assert_private_config "$SERVER_CONF"
-  # shellcheck disable=SC1090
-  . "$SERVER_CONF"
+  load_server_conf
   validate_wg_server_conf
   write_wg_server_conf_file
   write_wg_systemd_service "Getout WireGuard Server" \
@@ -350,9 +344,7 @@ restart_wg_server_with_rollback() {
 }
 
 maybe_allow_wg_ufw() {
-  assert_private_config "$SERVER_CONF"
-  # shellcheck disable=SC1090
-  . "$SERVER_CONF"
+  load_server_conf
   maybe_allow_ufw "$LISTEN_PORT" udp
 }
 

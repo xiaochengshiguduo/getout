@@ -246,6 +246,19 @@ write_file_meta() {
   chmod_private_file "$meta"
 }
 
+
+
+load_server_conf() {
+  assert_private_config "$SERVER_CONF"
+  # shellcheck disable=SC1090
+  . "$SERVER_CONF"
+}
+
+load_client_conf() {
+  assert_private_config "$CLIENT_CONF"
+  # shellcheck disable=SC1090
+  . "$CLIENT_CONF"
+}
 # --- 06 runtime/server rollback snapshots ------------------------------------
 
 snapshot_files() {
@@ -1319,9 +1332,7 @@ prompt_server_info() {
 
 write_gost_service() {
   [ -f "$SERVER_CONF" ] || fatal "未找到入口配置，请先修改入口信息。"
-  assert_private_config "$SERVER_CONF"
-  # shellcheck disable=SC1090
-  . "$SERVER_CONF"
+  load_server_conf
   local auth listen
   auth=""
   [ -n "${USERNAME:-}" ] && [ -n "${PASSWORD:-}" ] || fatal "入口必须配置用户名密码，请先修改入口信息。"
@@ -1362,9 +1373,7 @@ start_server() {
   echo "server" > "$MODE_FILE"
   chmod_private_file "$MODE_FILE"
   restart_gost_with_rollback "$snapshot" enable
-  assert_private_config "$SERVER_CONF"
-  # shellcheck disable=SC1090
-  . "$SERVER_CONF"
+  load_server_conf
   maybe_allow_ufw "$PORT" tcp
   success "入口已启动。"
   status
@@ -1533,9 +1542,7 @@ EOF
 
 write_wg_server_service() {
   [ -f "$SERVER_CONF" ] || fatal "未找到入口配置，请先修改入口信息。"
-  assert_private_config "$SERVER_CONF"
-  # shellcheck disable=SC1090
-  . "$SERVER_CONF"
+  load_server_conf
   validate_wg_server_conf
   write_wg_server_conf_file
   write_wg_systemd_service "Getout WireGuard Server" \
@@ -1572,9 +1579,7 @@ restart_wg_server_with_rollback() {
 }
 
 maybe_allow_wg_ufw() {
-  assert_private_config "$SERVER_CONF"
-  # shellcheck disable=SC1090
-  . "$SERVER_CONF"
+  load_server_conf
   maybe_allow_ufw "$LISTEN_PORT" udp
 }
 
@@ -1634,9 +1639,7 @@ configure_wg_server() {
 
 current_priority_mode() {
   if [ -f "$CLIENT_CONF" ]; then
-    assert_private_config "$CLIENT_CONF"
-    # shellcheck disable=SC1090
-    . "$CLIENT_CONF"
+    load_client_conf
     case "${PRIORITY_MODE:-}" in
       v4|v6) echo "$PRIORITY_MODE"; return 0 ;;
     esac
@@ -1646,9 +1649,7 @@ current_priority_mode() {
 
 warn_ssh_protection_status() {
   [ -f "$CLIENT_CONF" ] || return 0
-  assert_private_config "$CLIENT_CONF"
-  # shellcheck disable=SC1090
-  . "$CLIENT_CONF"
+  load_client_conf
   if [ -z "${SSH_REMOTE_IP:-}" ]; then
     warn "未检测到当前 SSH 来源 IP，仅依赖 SSH 监听端口保护回包。请确认 SSH 端口检测正确后再断开当前连接。"
   fi
@@ -1734,9 +1735,7 @@ ask_socks_config() {
 reuse_client_config_for_mode() {
   local mode="$1" address port username password
   [ -f "$CLIENT_CONF" ] || return 1
-  assert_private_config "$CLIENT_CONF"
-  # shellcheck disable=SC1090
-  . "$CLIENT_CONF"
+  load_client_conf
   address="${SOCKS_ADDRESS:-}"
   port="${SOCKS_PORT:-}"
   username="${SOCKS_USERNAME:-}"
@@ -1802,9 +1801,7 @@ write_wg_client_conf() {
 reuse_wg_client_config() {
   local mode="$1"
   [ -f "$CLIENT_CONF" ] || return 1
-  assert_private_config "$CLIENT_CONF"
-  # shellcheck disable=SC1090
-  . "$CLIENT_CONF"
+  load_client_conf
   [ "${TRANSPORT:-}" = "wireguard" ] || return 1
   [ -n "${WG_SERVER_ADDRESS:-}" ] && [ -n "${WG_SERVER_PORT:-}" ] || return 1
   [ -n "${WG_CLIENT_PRIVATE_KEY:-}" ] && [ -n "${WG_SERVER_PUBLIC_KEY:-}" ] || return 1
@@ -1844,9 +1841,7 @@ print_wg_peer_config() {
 }
 
 write_wg_config() {
-  assert_private_config "$CLIENT_CONF"
-  # shellcheck disable=SC1090
-  . "$CLIENT_CONF"
+  load_client_conf
   [ "${TRANSPORT:-}" = "wireguard" ] || return 1
   require_valid_wg_key "WG_CLIENT_PRIVATE_KEY" "${WG_CLIENT_PRIVATE_KEY:-}"
   require_valid_wg_key "WG_SERVER_PUBLIC_KEY" "${WG_SERVER_PUBLIC_KEY:-}"
@@ -1932,9 +1927,7 @@ EOF
 }
 
 write_tun_config() {
-  assert_private_config "$CLIENT_CONF"
-  # shellcheck disable=SC1090
-  . "$CLIENT_CONF"
+  load_client_conf
   validate_socks_config
   { print_tun_base_config; print_tun_auth_config; print_tun_misc_config; } > "$TUN_CONF"
   chmod_private_file "$TUN_CONF"
@@ -2054,9 +2047,7 @@ start_wg_client() {
 
 configured_client_transport() {
   if [ -f "$CLIENT_CONF" ]; then
-    assert_private_config "$CLIENT_CONF"
-    # shellcheck disable=SC1090
-    . "$CLIENT_CONF"
+    load_client_conf
     printf '%s\n' "${TRANSPORT:-socks5}"
   else
     printf 'socks5\n'
@@ -2073,9 +2064,7 @@ configure_client_mode() {
       wireguard:*) mode="wg-v4" ;;
     esac
   elif [ -f "$CLIENT_CONF" ]; then
-    assert_private_config "$CLIENT_CONF"
-    # shellcheck disable=SC1090
-    . "$CLIENT_CONF"
+    load_client_conf
     mode="${MODE:-$default_mode}"
   else
     mode="$default_mode"
@@ -2214,9 +2203,7 @@ switch_priority_mode() {
   require_root; require_debian; install_deps
   [ -f "$CLIENT_CONF" ] || fatal "未找到出口配置，请先修改出口信息。"
   local transport snapshot priority_mode
-  assert_private_config "$CLIENT_CONF"
-  # shellcheck disable=SC1090
-  . "$CLIENT_CONF"
+  load_client_conf
   transport="${TRANSPORT:-socks5}"
   priority_mode="$(next_priority_mode)"
   snapshot="$(snapshot_runtime_files)"
@@ -2226,8 +2213,7 @@ switch_priority_mode() {
   else
     rewrite_socks_client_priority_conf "$priority_mode"
   fi
-  # shellcheck disable=SC1090
-  . "$CLIENT_CONF"
+  load_client_conf
   apply_client_priority_runtime "$transport" "$snapshot"
   case "$priority_mode" in
     v4) success "已切换至 V4 优先模式。" ;;
@@ -2265,9 +2251,7 @@ restart_wg_server_mode() {
   snapshot="$(snapshot_server_files)"
   begin_server_rollback "$snapshot"
   [ -f "$SERVER_CONF" ] || fatal "未找到入口配置，请先修改入口信息。"
-  assert_private_config "$SERVER_CONF"
-  # shellcheck disable=SC1090
-  . "$SERVER_CONF"
+  load_server_conf
   [ "${SERVER_MODE:-}" = "wireguard" ] || fatal "入口配置不是 WireGuard 模式。"
   write_wg_server_service
   if ip link show getout-wg0 &>/dev/null; then
@@ -2293,9 +2277,7 @@ restart_gw_service_with_server_rollback() {
 rewrite_tun_runtime_for_restart() {
   local mode="$1" address port username password priority_mode
   [ -f "$CLIENT_CONF" ] || return 0
-  assert_private_config "$CLIENT_CONF"
-  # shellcheck disable=SC1090
-  . "$CLIENT_CONF"
+  load_client_conf
   address="${SOCKS_ADDRESS:-}"
   port="${SOCKS_PORT:-}"
   username="${SOCKS_USERNAME:-}"
@@ -2325,9 +2307,7 @@ restart_tun_mode() {
 rewrite_wg_client_runtime_for_restart() {
   local mode="$1"
   [ -f "$CLIENT_CONF" ] || return 0
-  assert_private_config "$CLIENT_CONF"
-  # shellcheck disable=SC1090
-  . "$CLIENT_CONF"
+  load_client_conf
   [ "${TRANSPORT:-}" = "wireguard" ] || fatal "出口配置不是 WireGuard 模式。"
   write_wg_config
   write_routes_scripts
@@ -2421,9 +2401,7 @@ print_autostart_status() {
 print_server_info() {
   echo "入口信息:"
   if [ ! -f "$SERVER_CONF" ]; then echo "未配置"; return 0; fi
-  assert_private_config "$SERVER_CONF"
-  # shellcheck disable=SC1090
-  . "$SERVER_CONF"
+  load_server_conf
   local ipv4 ipv6
   ipv4="$(main_ipv4 || true)"
   ipv6="$(main_ipv6 || true)"
@@ -2453,9 +2431,7 @@ print_server_info() {
 print_client_info() {
   echo "出口信息:"
   if [ ! -f "$CLIENT_CONF" ]; then echo "未配置"; return 0; fi
-  assert_private_config "$CLIENT_CONF"
-  # shellcheck disable=SC1090
-  . "$CLIENT_CONF"
+  load_client_conf
   if [ "${TRANSPORT:-}" = "wireguard" ]; then
     echo "类型: WireGuard"
     local addr="${WG_SERVER_ADDRESS:-}" port="${WG_SERVER_PORT:-}"

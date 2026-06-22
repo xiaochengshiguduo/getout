@@ -28,9 +28,7 @@ restart_wg_server_mode() {
   snapshot="$(snapshot_server_files)"
   begin_server_rollback "$snapshot"
   [ -f "$SERVER_CONF" ] || fatal "未找到入口配置，请先修改入口信息。"
-  assert_private_config "$SERVER_CONF"
-  # shellcheck disable=SC1090
-  . "$SERVER_CONF"
+  load_server_conf
   [ "${SERVER_MODE:-}" = "wireguard" ] || fatal "入口配置不是 WireGuard 模式。"
   write_wg_server_service
   if ip link show getout-wg0 &>/dev/null; then
@@ -56,9 +54,7 @@ restart_gw_service_with_server_rollback() {
 rewrite_tun_runtime_for_restart() {
   local mode="$1" address port username password priority_mode
   [ -f "$CLIENT_CONF" ] || return 0
-  assert_private_config "$CLIENT_CONF"
-  # shellcheck disable=SC1090
-  . "$CLIENT_CONF"
+  load_client_conf
   address="${SOCKS_ADDRESS:-}"
   port="${SOCKS_PORT:-}"
   username="${SOCKS_USERNAME:-}"
@@ -88,9 +84,7 @@ restart_tun_mode() {
 rewrite_wg_client_runtime_for_restart() {
   local mode="$1"
   [ -f "$CLIENT_CONF" ] || return 0
-  assert_private_config "$CLIENT_CONF"
-  # shellcheck disable=SC1090
-  . "$CLIENT_CONF"
+  load_client_conf
   [ "${TRANSPORT:-}" = "wireguard" ] || fatal "出口配置不是 WireGuard 模式。"
   write_wg_config
   write_routes_scripts
@@ -184,9 +178,7 @@ print_autostart_status() {
 print_server_info() {
   echo "入口信息:"
   if [ ! -f "$SERVER_CONF" ]; then echo "未配置"; return 0; fi
-  assert_private_config "$SERVER_CONF"
-  # shellcheck disable=SC1090
-  . "$SERVER_CONF"
+  load_server_conf
   local ipv4 ipv6
   ipv4="$(main_ipv4 || true)"
   ipv6="$(main_ipv6 || true)"
@@ -216,9 +208,7 @@ print_server_info() {
 print_client_info() {
   echo "出口信息:"
   if [ ! -f "$CLIENT_CONF" ]; then echo "未配置"; return 0; fi
-  assert_private_config "$CLIENT_CONF"
-  # shellcheck disable=SC1090
-  . "$CLIENT_CONF"
+  load_client_conf
   if [ "${TRANSPORT:-}" = "wireguard" ]; then
     echo "类型: WireGuard"
     local addr="${WG_SERVER_ADDRESS:-}" port="${WG_SERVER_PORT:-}"
