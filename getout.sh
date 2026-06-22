@@ -2438,141 +2438,117 @@ print_status_address() {
   fi
 }
 
+print_current_status() {
+  local mode="$1" gost_state="$2" tun_state="$3" wg_state="$4"
+  echo "当前运行:"
+  case "$mode" in
+    server) echo "入口 SOCKS5: $gost_state"; echo "出口: 已停止"; echo "当前模式: server" ;;
+    wg-server) echo "入口 WireGuard: $wg_state"; echo "出口: 已停止"; echo "当前模式: wg-server" ;;
+    v4) echo "入口: $gost_state"; echo "s5-V4 单栈模式: $tun_state"; echo "当前模式: v4" ;;
+    dual) echo "入口: $gost_state"; echo "V4+V6 双栈模式: $tun_state"; echo "当前模式: dual" ;;
+    wg-v4) echo "入口: $gost_state"; echo "WG-V4 单栈模式: $wg_state"; echo "当前模式: wg-v4" ;;
+    wg-dual) echo "入口: $gost_state"; echo "WG-V4+V6 双栈模式: $wg_state"; echo "当前模式: wg-dual" ;;
+    *) echo "入口: $gost_state"; echo "当前模式: none" ;;
+  esac
+}
+
+print_autostart_status() {
+  echo "自启动:"
+  echo "入口 SOCKS5: $(service_enabled_text getout-gost.service)"
+  echo "出口 tun2socks: $(service_enabled_text getout-tun.service)"
+  echo "WireGuard: $(service_enabled_text getout-wg.service)"
+}
+
+print_server_info() {
+  echo "入口信息:"
+  if [ ! -f "$SERVER_CONF" ]; then echo "未配置"; return 0; fi
+  assert_private_config "$SERVER_CONF"
+  # shellcheck disable=SC1090
+  . "$SERVER_CONF"
+  local ipv4 ipv6
+  ipv4="$(main_ipv4 || true)"
+  ipv6="$(main_ipv6 || true)"
+  if [ "${SERVER_MODE:-}" = "wireguard" ]; then
+    echo "类型: WireGuard"
+    print_status_address "$ipv4" "$ipv6"
+    echo "端口: ${LISTEN_PORT:-}"
+    if [ -n "${PEER_PRIVATE_KEY:-}" ]; then
+      echo "私钥: ${PEER_PRIVATE_KEY}"
+    else
+      echo "私钥: <旧配置未保存客户端私钥，请重新配置入口>"
+    fi
+    local server_pub
+    server_pub="$(printf '%s' "${PRIVATE_KEY:-}" | wg pubkey 2>/dev/null || echo "<无法推导>")"
+    echo "公钥: ${server_pub}"
+  else
+    echo "类型: SOCKS5"
+    print_status_address "$ipv4" "$ipv6"
+    echo "端口: ${PORT:-}"
+    if [ -n "${USERNAME:-}" ]; then
+      echo "用户名: ${USERNAME:-}"
+      echo "密码: ${PASSWORD:-}"
+    fi
+  fi
+}
+
+print_client_info() {
+  echo "出口信息:"
+  if [ ! -f "$CLIENT_CONF" ]; then echo "未配置"; return 0; fi
+  assert_private_config "$CLIENT_CONF"
+  # shellcheck disable=SC1090
+  . "$CLIENT_CONF"
+  if [ "${TRANSPORT:-}" = "wireguard" ]; then
+    echo "类型: WireGuard"
+    local addr="${WG_SERVER_ADDRESS:-}" port="${WG_SERVER_PORT:-}"
+    local v4_part="${addr%%,*}" v6_part="${addr#*,}"
+    v4_part="${v4_part// /}"; v6_part="${v6_part# }"
+    if [ -n "$v6_part" ] && [ "$v6_part" != "$addr" ]; then
+      print_status_address "$v4_part" "$v6_part"
+    else
+      print_status_address "$addr"
+    fi
+    echo "端口: ${port}"
+    echo "私钥: ${WG_CLIENT_PRIVATE_KEY:-}"
+    echo "公钥: ${WG_SERVER_PUBLIC_KEY:-}"
+  else
+    echo "类型: SOCKS5"
+    echo "地址: ${SOCKS_ADDRESS:-}"
+    echo "端口: ${SOCKS_PORT:-}"
+    echo "用户名: ${SOCKS_USERNAME:-}"
+    echo "密码: ${SOCKS_PASSWORD:-}"
+  fi
+  case "${PRIORITY_MODE:-$DEFAULT_PRIORITY_MODE}" in
+    v4) echo "优先模式: V4 优先" ;;
+    *) echo "优先模式: V6 优先" ;;
+  esac
+}
+
+print_outlet_test() {
+  echo "出口测试:"
+  echo -n "IPv4: "; curl -4 -s --connect-timeout 8 --max-time 12 https://api.ipify.org || curl -4 -s --connect-timeout 8 --max-time 12 http://v4.ident.me || echo -n "失败"; echo
+  echo -n "IPv6: "; curl -6 -s --connect-timeout 8 --max-time 12 https://api64.ipify.org || curl -6 -s --connect-timeout 8 --max-time 12 http://v6.ident.me || echo -n "失败"; echo
+}
+
 status() {
-  local mode gost_state tun_state wg_state gost_enabled tun_enabled wg_enabled
+  local mode gost_state tun_state wg_state
   mode="$(current_mode)"
   gost_state="已停止"; tun_state="已停止"; wg_state="已停止"
   server_active && gost_state="运行中"
   tun_active && tun_state="运行中"
   (wg_server_active || wg_client_active) && wg_state="运行中"
-  gost_enabled="$(service_enabled_text getout-gost.service)"
-  tun_enabled="$(service_enabled_text getout-tun.service)"
-  wg_enabled="$(service_enabled_text getout-wg.service)"
 
   echo -e "${CYAN}========== getout 状态 ==========${NC}"
   echo "版本: $SCRIPT_VERSION"
   echo
-  echo "当前运行:"
-  case "$mode" in
-    server)
-      echo "入口 SOCKS5: $gost_state"
-      echo "出口: 已停止"
-      echo "当前模式: server"
-      ;;
-    wg-server)
-      echo "入口 WireGuard: $wg_state"
-      echo "出口: 已停止"
-      echo "当前模式: wg-server"
-      ;;
-    v4)
-      echo "入口: $gost_state"
-      echo "s5-V4 单栈模式: $tun_state"
-      echo "当前模式: v4"
-      ;;
-    dual)
-      echo "入口: $gost_state"
-      echo "V4+V6 双栈模式: $tun_state"
-      echo "当前模式: dual"
-      ;;
-    wg-v4)
-      echo "入口: $gost_state"
-      echo "WG-V4 单栈模式: $wg_state"
-      echo "当前模式: wg-v4"
-      ;;
-    wg-dual)
-      echo "入口: $gost_state"
-      echo "WG-V4+V6 双栈模式: $wg_state"
-      echo "当前模式: wg-dual"
-      ;;
-    *)
-      echo "入口: $gost_state"
-      echo "当前模式: none"
-      ;;
-  esac
-
+  print_current_status "$mode" "$gost_state" "$tun_state" "$wg_state"
   echo
-  echo "自启动:"
-  echo "入口 SOCKS5: $gost_enabled"
-  echo "出口 tun2socks: $tun_enabled"
-  echo "WireGuard: $wg_enabled"
-
+  print_autostart_status
   echo
-  echo "入口信息:"
-  if [ -f "$SERVER_CONF" ]; then
-    assert_private_config "$SERVER_CONF"
-    # shellcheck disable=SC1090
-    . "$SERVER_CONF"
-    if [ "${SERVER_MODE:-}" = "wireguard" ]; then
-      echo "类型: WireGuard"
-      local ipv4 ipv6
-      ipv4="$(main_ipv4 || true)"
-      ipv6="$(main_ipv6 || true)"
-      print_status_address "$ipv4" "$ipv6"
-      echo "端口: ${LISTEN_PORT:-}"
-      if [ -n "${PEER_PRIVATE_KEY:-}" ]; then
-        echo "私钥: ${PEER_PRIVATE_KEY}"
-      else
-        echo "私钥: <旧配置未保存客户端私钥，请重新配置入口>"
-      fi
-      local server_pub="$(printf '%s' "${PRIVATE_KEY:-}" | wg pubkey 2>/dev/null || echo "<无法推导>")"
-      echo "公钥: ${server_pub}"
-    else
-      echo "类型: SOCKS5"
-      local ipv4 ipv6
-      ipv4="$(main_ipv4 || true)"
-      ipv6="$(main_ipv6 || true)"
-      print_status_address "$ipv4" "$ipv6"
-      echo "端口: ${PORT:-}"
-      if [ -n "${USERNAME:-}" ]; then
-        echo "用户名: ${USERNAME:-}"
-        echo "密码: ${PASSWORD:-}"
-      fi
-    fi
-  else
-    echo "未配置"
-  fi
-
+  print_server_info
   echo
-  echo "出口信息:"
-  if [ -f "$CLIENT_CONF" ]; then
-    assert_private_config "$CLIENT_CONF"
-    # shellcheck disable=SC1090
-    . "$CLIENT_CONF"
-    if [ "${TRANSPORT:-}" = "wireguard" ]; then
-      echo "类型: WireGuard"
-      local addr="${WG_SERVER_ADDRESS:-}"
-      local port="${WG_SERVER_PORT:-}"
-      local v4_part="${addr%%,*}"
-      v4_part="${v4_part// /}"
-      local v6_part="${addr#*,}"
-      v6_part="${v6_part# }"
-      if [ -n "$v6_part" ] && [ "$v6_part" != "$addr" ]; then
-        print_status_address "$v4_part" "$v6_part"
-      else
-        print_status_address "$addr"
-      fi
-      echo "端口: ${port}"
-      echo "私钥: ${WG_CLIENT_PRIVATE_KEY:-}"
-      echo "公钥: ${WG_SERVER_PUBLIC_KEY:-}"
-    else
-      echo "类型: SOCKS5"
-      echo "地址: ${SOCKS_ADDRESS:-}"
-      echo "端口: ${SOCKS_PORT:-}"
-      echo "用户名: ${SOCKS_USERNAME:-}"
-      echo "密码: ${SOCKS_PASSWORD:-}"
-    fi
-    case "${PRIORITY_MODE:-$DEFAULT_PRIORITY_MODE}" in
-      v4) echo "优先模式: V4 优先" ;;
-      *) echo "优先模式: V6 优先" ;;
-    esac
-  else
-    echo "未配置"
-  fi
-
+  print_client_info
   echo
-  echo "出口测试:"
-  echo -n "IPv4: "; curl -4 -s --connect-timeout 8 --max-time 12 https://api.ipify.org || curl -4 -s --connect-timeout 8 --max-time 12 http://v4.ident.me || echo -n "失败"; echo
-  echo -n "IPv6: "; curl -6 -s --connect-timeout 8 --max-time 12 https://api64.ipify.org || curl -6 -s --connect-timeout 8 --max-time 12 http://v6.ident.me || echo -n "失败"; echo
+  print_outlet_test
 }
 
 doctor_check() {
