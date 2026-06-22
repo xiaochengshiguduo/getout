@@ -753,6 +753,12 @@ preflight_tun_runtime() {
   preflight_route_rules
 }
 
+cleanup_wg_iface() {
+  if ip link show getout-wg0 &>/dev/null; then
+    wg-quick down "$WG_CONF" 2>/dev/null || ip link del getout-wg0 2>/dev/null || true
+  fi
+}
+
 restore_runtime_or_warn() {
   local snapshot="$1"
   RUNTIME_ROLLBACK_SNAPSHOT=""
@@ -830,9 +836,7 @@ preflight_wg_runtime_with_rollback() {
 restart_wg_with_rollback() {
   local snapshot="$1"
   # 清理可能残留的接口（服务 failed 后 ExecStopPost 未执行）
-  if ip link show getout-wg0 &>/dev/null; then
-    wg-quick down "$WG_CONF" 2>/dev/null || ip link del getout-wg0 2>/dev/null || true
-  fi
+  cleanup_wg_iface
   restart_service_with_rollback \
     getout-wg.service "$snapshot" restore_runtime_or_warn "${2:-restart}" 2 \
     "getout-wg.service 启动失败，请查看：journalctl -u getout-wg.service -e"
@@ -1229,9 +1233,7 @@ stop_client_keep_config() {
     systemctl stop getout-wg.service 2>/dev/null || true
     # 服务可能处于 failed 状态，systemctl stop 不执行 ExecStopPost
     # 手动清理 WireGuard 接口作为兜底
-    if ip link show getout-wg0 &>/dev/null; then
-      wg-quick down "$WG_CONF" 2>/dev/null || ip link del getout-wg0 2>/dev/null || true
-    fi
+    cleanup_wg_iface
     cleanup_rules
     systemctl disable getout-wg.service 2>/dev/null || true
   else
@@ -1244,10 +1246,15 @@ stop_client_keep_config() {
 stop_wg_server_keep_config() {
   systemctl stop getout-wg.service 2>/dev/null || true
   # 服务可能处于 failed 状态，手动清理接口兜底
-  if ip link show getout-wg0 &>/dev/null; then
-    wg-quick down "$WG_CONF" 2>/dev/null || ip link del getout-wg0 2>/dev/null || true
-  fi
+  cleanup_wg_iface
   systemctl disable getout-wg.service 2>/dev/null || true
+}
+
+maybe_allow_ufw() {
+  local port="$1" proto="$2"
+  command -v ufw >/dev/null 2>&1 || return 0
+  ufw status 2>/dev/null | grep -q "Status: active" || return 0
+  ufw allow "${port}/${proto}" >/dev/null || warn "ufw 放行 ${port}/${proto} 失败，请手动检查防火墙。"
 }
 
 prompt_server_info() {
@@ -1256,7 +1263,7 @@ prompt_server_info() {
   local port user pass yn
   read -rp "请输入入口 SOCKS5 监听端口 [默认: 1080]: " port
   port="${port:-1080}"
-  [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || fatal "端口无效：$port"
+  require_valid_port "端口" "$port"
 
   read -rp "是否设置用户名密码? [Y/n]: " yn
   yn="${yn:-Y}"
@@ -1322,12 +1329,10 @@ start_server() {
   echo "server" > "$MODE_FILE"
   chmod_private_file "$MODE_FILE"
   restart_gost_with_rollback "$snapshot" enable
-  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
-    assert_private_config "$SERVER_CONF"
-    # shellcheck disable=SC1090
-    . "$SERVER_CONF"
-    ufw allow "${PORT}/tcp" >/dev/null || true
-  fi
+  assert_private_config "$SERVER_CONF"
+  # shellcheck disable=SC1090
+  . "$SERVER_CONF"
+  maybe_allow_ufw "$PORT" tcp
   success "入口已启动。"
   status
 }
@@ -1540,12 +1545,10 @@ restart_wg_server_with_rollback() {
 }
 
 maybe_allow_wg_ufw() {
-  command -v ufw >/dev/null 2>&1 || return 0
-  ufw status 2>/dev/null | grep -q "Status: active" || return 0
   assert_private_config "$SERVER_CONF"
   # shellcheck disable=SC1090
   . "$SERVER_CONF"
-  ufw allow "${LISTEN_PORT}/udp" >/dev/null || true
+  maybe_allow_ufw "$LISTEN_PORT" udp
 }
 
 apply_wg_server_config() {
@@ -1681,7 +1684,7 @@ ask_socks_config() {
   [ -n "$address" ] || fatal "SOCKS5 地址不能为空。"
   read -rp "请输入 SOCKS5 服务器端口 [默认: 1080]: " port
   port="${port:-1080}"
-  [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || fatal "端口无效：$port"
+  require_valid_port "端口" "$port"
   read -rp "上游 SOCKS5 用户名 [无认证可留空]: " username
   password=""
   if [ -n "$username" ]; then
@@ -1707,12 +1710,16 @@ reuse_client_config_for_mode() {
   return 0
 }
 
+default_wg_client_v4_addr() { echo "${DEFAULT_WG_ADDRESS%.*}.2/32"; }
+default_wg_client_v6_addr() { echo "${DEFAULT_WG_V6_ADDRESS%%::*}::2/128"; }
+
 # 根据 WG 模式返回客户端隧道地址
 default_wg_addr() {
   local mode="${1:-wg-v4}"
   case "$mode" in
-    wg-dual) echo "10.66.66.2/32, fd86:ea04:1115::2/128" ;;
-    *)       echo "10.66.66.2/32" ;;
+    wg-dual) printf '%s, %s
+' "$(default_wg_client_v4_addr)" "$(default_wg_client_v6_addr)" ;;
+    *)       default_wg_client_v4_addr ;;
   esac
 }
 
@@ -1775,7 +1782,7 @@ reuse_wg_client_config() {
       ;;
     wg-v4)
       # For v4-only, strip any IPv6 part
-      addr="10.66.66.2/32"
+      addr="$(default_wg_client_v4_addr)"
       ;;
   esac
   write_wg_client_conf "$mode" "$WG_SERVER_ADDRESS" "$WG_SERVER_PORT" "$WG_CLIENT_PRIVATE_KEY" "$addr" "$WG_SERVER_PUBLIC_KEY" "${WG_PRESHARED_KEY:-}" "${WG_DNS:-$DEFAULT_WG_DNS}"
@@ -1841,10 +1848,20 @@ EOF
   systemctl daemon-reload
 }
 
+validate_socks_config() {
+  [ -n "${SOCKS_ADDRESS:-}" ] || fatal "出口配置缺少 SOCKS_ADDRESS。"
+  [ -n "${SOCKS_PORT:-}" ] || fatal "出口配置缺少 SOCKS_PORT。"
+  require_valid_port "SOCKS_PORT" "$SOCKS_PORT"
+  format_endpoint_host "$SOCKS_ADDRESS" >/dev/null
+  [ -z "${SOCKS_USERNAME:-}" ] || reject_url_unsafe "SOCKS_USERNAME" "$SOCKS_USERNAME"
+  [ -z "${SOCKS_PASSWORD:-}" ] || reject_url_unsafe "SOCKS_PASSWORD" "$SOCKS_PASSWORD"
+}
+
 write_tun_config() {
   assert_private_config "$CLIENT_CONF"
   # shellcheck disable=SC1090
   . "$CLIENT_CONF"
+  validate_socks_config
   cat > "$TUN_CONF" <<EOF
 tunnel:
   name: $TUN_NAME

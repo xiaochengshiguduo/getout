@@ -43,9 +43,7 @@ stop_client_keep_config() {
     systemctl stop getout-wg.service 2>/dev/null || true
     # 服务可能处于 failed 状态，systemctl stop 不执行 ExecStopPost
     # 手动清理 WireGuard 接口作为兜底
-    if ip link show getout-wg0 &>/dev/null; then
-      wg-quick down "$WG_CONF" 2>/dev/null || ip link del getout-wg0 2>/dev/null || true
-    fi
+    cleanup_wg_iface
     cleanup_rules
     systemctl disable getout-wg.service 2>/dev/null || true
   else
@@ -58,10 +56,15 @@ stop_client_keep_config() {
 stop_wg_server_keep_config() {
   systemctl stop getout-wg.service 2>/dev/null || true
   # 服务可能处于 failed 状态，手动清理接口兜底
-  if ip link show getout-wg0 &>/dev/null; then
-    wg-quick down "$WG_CONF" 2>/dev/null || ip link del getout-wg0 2>/dev/null || true
-  fi
+  cleanup_wg_iface
   systemctl disable getout-wg.service 2>/dev/null || true
+}
+
+maybe_allow_ufw() {
+  local port="$1" proto="$2"
+  command -v ufw >/dev/null 2>&1 || return 0
+  ufw status 2>/dev/null | grep -q "Status: active" || return 0
+  ufw allow "${port}/${proto}" >/dev/null || warn "ufw 放行 ${port}/${proto} 失败，请手动检查防火墙。"
 }
 
 prompt_server_info() {
@@ -70,7 +73,7 @@ prompt_server_info() {
   local port user pass yn
   read -rp "请输入入口 SOCKS5 监听端口 [默认: 1080]: " port
   port="${port:-1080}"
-  [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || fatal "端口无效：$port"
+  require_valid_port "端口" "$port"
 
   read -rp "是否设置用户名密码? [Y/n]: " yn
   yn="${yn:-Y}"
@@ -136,12 +139,10 @@ start_server() {
   echo "server" > "$MODE_FILE"
   chmod_private_file "$MODE_FILE"
   restart_gost_with_rollback "$snapshot" enable
-  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
-    assert_private_config "$SERVER_CONF"
-    # shellcheck disable=SC1090
-    . "$SERVER_CONF"
-    ufw allow "${PORT}/tcp" >/dev/null || true
-  fi
+  assert_private_config "$SERVER_CONF"
+  # shellcheck disable=SC1090
+  . "$SERVER_CONF"
+  maybe_allow_ufw "$PORT" tcp
   success "入口已启动。"
   status
 }
@@ -354,12 +355,10 @@ restart_wg_server_with_rollback() {
 }
 
 maybe_allow_wg_ufw() {
-  command -v ufw >/dev/null 2>&1 || return 0
-  ufw status 2>/dev/null | grep -q "Status: active" || return 0
   assert_private_config "$SERVER_CONF"
   # shellcheck disable=SC1090
   . "$SERVER_CONF"
-  ufw allow "${LISTEN_PORT}/udp" >/dev/null || true
+  maybe_allow_ufw "$LISTEN_PORT" udp
 }
 
 apply_wg_server_config() {

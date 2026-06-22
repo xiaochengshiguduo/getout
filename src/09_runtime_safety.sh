@@ -84,6 +84,12 @@ preflight_tun_runtime() {
   preflight_route_rules
 }
 
+cleanup_wg_iface() {
+  if ip link show getout-wg0 &>/dev/null; then
+    wg-quick down "$WG_CONF" 2>/dev/null || ip link del getout-wg0 2>/dev/null || true
+  fi
+}
+
 restore_runtime_or_warn() {
   local snapshot="$1"
   RUNTIME_ROLLBACK_SNAPSHOT=""
@@ -161,9 +167,7 @@ preflight_wg_runtime_with_rollback() {
 restart_wg_with_rollback() {
   local snapshot="$1"
   # 清理可能残留的接口（服务 failed 后 ExecStopPost 未执行）
-  if ip link show getout-wg0 &>/dev/null; then
-    wg-quick down "$WG_CONF" 2>/dev/null || ip link del getout-wg0 2>/dev/null || true
-  fi
+  cleanup_wg_iface
   restart_service_with_rollback \
     getout-wg.service "$snapshot" restore_runtime_or_warn "${2:-restart}" 2 \
     "getout-wg.service 启动失败，请查看：journalctl -u getout-wg.service -e"

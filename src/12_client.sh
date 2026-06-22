@@ -79,7 +79,7 @@ ask_socks_config() {
   [ -n "$address" ] || fatal "SOCKS5 地址不能为空。"
   read -rp "请输入 SOCKS5 服务器端口 [默认: 1080]: " port
   port="${port:-1080}"
-  [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || fatal "端口无效：$port"
+  require_valid_port "端口" "$port"
   read -rp "上游 SOCKS5 用户名 [无认证可留空]: " username
   password=""
   if [ -n "$username" ]; then
@@ -105,12 +105,16 @@ reuse_client_config_for_mode() {
   return 0
 }
 
+default_wg_client_v4_addr() { echo "${DEFAULT_WG_ADDRESS%.*}.2/32"; }
+default_wg_client_v6_addr() { echo "${DEFAULT_WG_V6_ADDRESS%%::*}::2/128"; }
+
 # 根据 WG 模式返回客户端隧道地址
 default_wg_addr() {
   local mode="${1:-wg-v4}"
   case "$mode" in
-    wg-dual) echo "10.66.66.2/32, fd86:ea04:1115::2/128" ;;
-    *)       echo "10.66.66.2/32" ;;
+    wg-dual) printf '%s, %s
+' "$(default_wg_client_v4_addr)" "$(default_wg_client_v6_addr)" ;;
+    *)       default_wg_client_v4_addr ;;
   esac
 }
 
@@ -173,7 +177,7 @@ reuse_wg_client_config() {
       ;;
     wg-v4)
       # For v4-only, strip any IPv6 part
-      addr="10.66.66.2/32"
+      addr="$(default_wg_client_v4_addr)"
       ;;
   esac
   write_wg_client_conf "$mode" "$WG_SERVER_ADDRESS" "$WG_SERVER_PORT" "$WG_CLIENT_PRIVATE_KEY" "$addr" "$WG_SERVER_PUBLIC_KEY" "${WG_PRESHARED_KEY:-}" "${WG_DNS:-$DEFAULT_WG_DNS}"
@@ -239,10 +243,20 @@ EOF
   systemctl daemon-reload
 }
 
+validate_socks_config() {
+  [ -n "${SOCKS_ADDRESS:-}" ] || fatal "出口配置缺少 SOCKS_ADDRESS。"
+  [ -n "${SOCKS_PORT:-}" ] || fatal "出口配置缺少 SOCKS_PORT。"
+  require_valid_port "SOCKS_PORT" "$SOCKS_PORT"
+  format_endpoint_host "$SOCKS_ADDRESS" >/dev/null
+  [ -z "${SOCKS_USERNAME:-}" ] || reject_url_unsafe "SOCKS_USERNAME" "$SOCKS_USERNAME"
+  [ -z "${SOCKS_PASSWORD:-}" ] || reject_url_unsafe "SOCKS_PASSWORD" "$SOCKS_PASSWORD"
+}
+
 write_tun_config() {
   assert_private_config "$CLIENT_CONF"
   # shellcheck disable=SC1090
   . "$CLIENT_CONF"
+  validate_socks_config
   cat > "$TUN_CONF" <<EOF
 tunnel:
   name: $TUN_NAME
