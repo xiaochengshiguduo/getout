@@ -313,6 +313,11 @@ check_config_permissions() {
   fi
 }
 
+check_managed_global_files() {
+  [ -f "$RESOLV_MARKER" ] && [ ! -f "$RESOLV_ORIG" ] && check_warn "/etc/resolv.conf 由 getout 标记管理，但原始备份缺失；停止出口时将保留当前 DNS。"
+  [ -f "$GAI_MARKER" ] && [ ! -f "$GAI_ORIG" ] && check_warn "/etc/gai.conf 由 getout 标记管理，但原始备份缺失；停止出口时只会移除 getout 管理块。"
+}
+
 check_runtime_artifacts() {
   [ -x "$GOST_BIN" ] && check_ok "入口二进制存在：$GOST_BIN" || check_warn "入口二进制不存在，启动 SOCKS5 模式时会下载。"
   [ -x "$TUN_BIN" ] && check_ok "出口二进制存在：$TUN_BIN" || check_warn "出口二进制不存在，启动 tun2socks 出口时会下载。"
@@ -346,6 +351,7 @@ doctor_check() {
   echo
   check_host_requirements
   check_config_permissions
+  check_managed_global_files
   check_runtime_artifacts
   check_outlet_preflight "$mode"
   if [ "$doctor_failed" = "0" ]; then
