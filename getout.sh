@@ -2594,17 +2594,12 @@ status() {
   print_outlet_test
 }
 
-doctor_check() {
-  local failed=0 mode
-  mode="$(current_mode)"
-  echo -e "${CYAN}========== getout doctor ==========${NC}"
-  echo "版本: $SCRIPT_VERSION"
-  echo
+doctor_failed=0
+check_ok() { echo -e "${GREEN}[OK]${NC} $*"; }
+check_warn() { echo -e "${YELLOW}[警告]${NC} $*"; }
+check_fail() { echo -e "${RED}[错误]${NC} $*"; doctor_failed=1; }
 
-  check_ok() { echo -e "${GREEN}[OK]${NC} $*"; }
-  check_warn() { echo -e "${YELLOW}[警告]${NC} $*"; }
-  check_fail() { echo -e "${RED}[错误]${NC} $*"; failed=1; }
-
+check_host_requirements() {
   [ "${EUID:-$(id -u)}" -eq 0 ] && check_ok "root 权限" || check_fail "请使用 root 权限运行 doctor。"
   if [ -r /etc/os-release ]; then
     # shellcheck disable=SC1091
@@ -2619,14 +2614,17 @@ doctor_check() {
   command -v ip >/dev/null 2>&1 && check_ok "iproute2 可用" || check_fail "未找到 ip 命令。"
   command -v curl >/dev/null 2>&1 && check_ok "curl 可用" || check_warn "未找到 curl，下载/状态测试可能受影响。"
   command -v sha256sum >/dev/null 2>&1 && check_ok "sha256sum 可用" || check_warn "缺少 sha256sum，无法做更新完整性校验。"
+  command -v wg >/dev/null 2>&1 && check_ok "wg 命令可用" || check_warn "未找到 wg 命令，WireGuard 模式需要 wireguard-tools。"
+  command -v wg-quick >/dev/null 2>&1 && check_ok "wg-quick 命令可用" || check_warn "未找到 wg-quick 命令，WireGuard 模式需要 wireguard-tools。"
+}
 
+check_config_permissions() {
   if [ -d "$CONF_DIR" ]; then
     check_ok "配置目录存在：$CONF_DIR"
     find "$CONF_DIR" -maxdepth 0 -type d -user root ! -perm /077 | grep -q . && check_ok "配置目录权限安全" || check_fail "配置目录权限不安全，应为 root 且 group/other 不可访问。"
   else
     check_warn "配置目录不存在：$CONF_DIR"
   fi
-
   if [ -f "$SERVER_CONF" ]; then
     find "$SERVER_CONF" -maxdepth 0 -type f -user root ! -perm /022 | grep -q . && check_ok "入口配置权限安全" || check_fail "入口配置权限不安全。"
   else
@@ -2637,36 +2635,49 @@ doctor_check() {
   else
     check_warn "出口配置不存在。"
   fi
+}
 
+check_runtime_artifacts() {
   [ -x "$GOST_BIN" ] && check_ok "入口二进制存在：$GOST_BIN" || check_warn "入口二进制不存在，启动 SOCKS5 模式时会下载。"
   [ -x "$TUN_BIN" ] && check_ok "出口二进制存在：$TUN_BIN" || check_warn "出口二进制不存在，启动 tun2socks 出口时会下载。"
-  command -v wg >/dev/null 2>&1 && check_ok "wg 命令可用" || check_warn "未找到 wg 命令，WireGuard 模式需要 wireguard-tools。"
-  command -v wg-quick >/dev/null 2>&1 && check_ok "wg-quick 命令可用" || check_warn "未找到 wg-quick 命令，WireGuard 模式需要 wireguard-tools。"
   [ -f "$GOST_SERVICE" ] && check_ok "入口 SOCKS5 systemd unit 存在" || check_warn "入口 SOCKS5 systemd unit 不存在。"
   [ -f "$TUN_SERVICE" ] && check_ok "出口 tun2socks systemd unit 存在" || check_warn "出口 tun2socks systemd unit 不存在。"
   [ -f "$WG_SERVICE" ] && check_ok "WireGuard systemd unit 存在" || check_warn "WireGuard systemd unit 不存在。"
-
   if [ -f "$ROUTES_UP" ] && [ -f "$ROUTES_DOWN" ]; then
     bash -n "$ROUTES_UP" && bash -n "$ROUTES_DOWN" && check_ok "路由脚本语法正常" || check_fail "路由脚本语法异常。"
   else
     check_warn "路由脚本不存在，启动出口时会生成。"
   fi
+}
 
+check_outlet_preflight() {
+  local mode="$1"
   if [ "$mode" = "v4" ] || [ "$mode" = "dual" ]; then
     preflight_tun_runtime && check_ok "出口 tun2socks runtime preflight 通过" || check_fail "出口 tun2socks runtime preflight 失败。"
-  elif [[ "$mode" =~ ^wg- ]]; then
+  elif is_wg_client_mode "$mode"; then
     preflight_wg_runtime && check_ok "出口 WireGuard runtime preflight 通过" || check_fail "出口 WireGuard runtime preflight 失败。"
   else
     check_warn "当前不是出口模式，跳过出口 runtime preflight。"
   fi
+}
 
-  if [ "$failed" = "0" ]; then
+doctor_check() {
+  local mode
+  doctor_failed=0
+  mode="$(current_mode)"
+  echo -e "${CYAN}========== getout doctor ==========${NC}"
+  echo "版本: $SCRIPT_VERSION"
+  echo
+  check_host_requirements
+  check_config_permissions
+  check_runtime_artifacts
+  check_outlet_preflight "$mode"
+  if [ "$doctor_failed" = "0" ]; then
     success "doctor 检查完成，未发现阻塞问题。"
   else
     fatal "doctor 检查发现阻塞问题，请按上方错误处理。"
   fi
 }
-
 # --- 14 CLI dispatch ---------------------------------------------------------
 
 menu_action_label() {
