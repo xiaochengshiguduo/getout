@@ -1510,6 +1510,52 @@ write_wg_server_service() {
     $'ExecStartPre=/sbin/sysctl -w net.ipv4.ip_forward=1\nExecStartPre=/sbin/sysctl -w net.ipv6.conf.all.forwarding=1\n'
 }
 
+ensure_wg_server_config_or_prompt() {
+  local snapshot="$1"
+  if [ -f "$SERVER_CONF" ] && grep -q '^SERVER_MODE=wireguard' "$SERVER_CONF"; then
+    assert_private_config "$SERVER_CONF"
+    return 0
+  fi
+  if [ ! -t 0 ]; then
+    restore_server_or_warn "$snapshot"
+    fatal "未找到 WireGuard 配置，请先交互运行 getout wg-server 或在菜单中选择 2 配置。"
+  fi
+  prompt_wg_server_info
+}
+
+restart_wg_server_with_rollback() {
+  local snapshot="$1" action="${2:-restart}" restore_old="${3:-0}"
+  if [ "$action" = "enable" ]; then
+    systemctl enable --now getout-wg.service
+  else
+    systemctl restart getout-wg.service
+  fi
+  sleep 2
+  if ! systemctl is-active --quiet getout-wg.service; then
+    restore_server_or_warn "$snapshot"
+    [ "$restore_old" = "1" ] && systemctl restart getout-wg.service 2>/dev/null || true
+    fatal "getout-wg.service 启动失败，请查看：journalctl -u getout-wg.service -e"
+  fi
+  clear_runtime_rollback "$snapshot"
+}
+
+maybe_allow_wg_ufw() {
+  command -v ufw >/dev/null 2>&1 || return 0
+  ufw status 2>/dev/null | grep -q "Status: active" || return 0
+  assert_private_config "$SERVER_CONF"
+  # shellcheck disable=SC1090
+  . "$SERVER_CONF"
+  ufw allow "${LISTEN_PORT}/udp" >/dev/null || true
+}
+
+apply_wg_server_config() {
+  local snapshot="$1" action="$2" restore_old="${3:-0}"
+  write_wg_server_service
+  echo "wg-server" > "$MODE_FILE"
+  chmod_private_file "$MODE_FILE"
+  restart_wg_server_with_rollback "$snapshot" "$action" "$restore_old"
+}
+
 start_wg_server() {
   local snapshot
   require_root; require_debian; install_deps
@@ -1519,37 +1565,9 @@ start_wg_server() {
   stop_client_keep_config
   stop_server_keep_config
   stop_wg_server_keep_config
-  if [ -f "$SERVER_CONF" ] && grep -q '^SERVER_MODE=wireguard' "$SERVER_CONF"; then
-    assert_private_config "$SERVER_CONF"
-    # shellcheck disable=SC1090
-    . "$SERVER_CONF"
-  else
-    if [ ! -t 0 ]; then
-      restore_server_or_warn "$snapshot"
-      fatal "未找到 WireGuard 配置，请先交互运行 getout wg-server 或在菜单中选择 2 配置。"
-    fi
-    prompt_wg_server_info
-  fi
-  [ -f "$SERVER_CONF" ] && grep -q '^SERVER_MODE=wireguard' "$SERVER_CONF" || {
-    restore_server_or_warn "$snapshot"
-    fatal "WireGuard 配置无效。"
-  }
-  write_wg_server_service
-  echo "wg-server" > "$MODE_FILE"
-  chmod_private_file "$MODE_FILE"
-  systemctl enable --now getout-wg.service
-  sleep 2
-  if ! systemctl is-active --quiet getout-wg.service; then
-    restore_server_or_warn "$snapshot"
-    fatal "getout-wg.service 启动失败，请查看：journalctl -u getout-wg.service -e"
-  fi
-  clear_runtime_rollback "$snapshot"
-  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
-    assert_private_config "$SERVER_CONF"
-    # shellcheck disable=SC1090
-    . "$SERVER_CONF"
-    ufw allow "${LISTEN_PORT}/udp" >/dev/null || true
-  fi
+  ensure_wg_server_config_or_prompt "$snapshot"
+  apply_wg_server_config "$snapshot" enable
+  maybe_allow_wg_ufw
   success "入口 WireGuard 模式已启动。"
   status
 }
@@ -1567,20 +1585,13 @@ configure_wg_server() {
   snapshot="$(snapshot_server_files)"
   begin_server_rollback "$snapshot"
   prompt_wg_server_info
-  write_wg_server_service
   if [ "$was_active" = "1" ]; then
-    systemctl restart getout-wg.service
-    sleep 2
-    if ! systemctl is-active --quiet getout-wg.service; then
-      restore_server_or_warn "$snapshot"
-      systemctl restart getout-wg.service 2>/dev/null || true
-      fatal "getout-wg.service 启动失败，请查看：journalctl -u getout-wg.service -e"
-    fi
-    clear_runtime_rollback "$snapshot"
+    apply_wg_server_config "$snapshot" restart 1
     systemctl enable getout-wg.service >/dev/null 2>&1 || true
     success "入口 WireGuard 信息已更新并立即应用。"
     status
   else
+    write_wg_server_service
     clear_runtime_rollback "$snapshot"
     success "入口 WireGuard 信息已保存，启动入口后生效。"
     if any_client_active; then
@@ -1890,41 +1901,49 @@ EOF
   systemctl daemon-reload
 }
 
-start_client() {
-  local mode="$1"
-  local snapshot
-  require_root; require_debian; install_deps; ensure_tun
-  ensure_conf_dir
-  snapshot="$(snapshot_runtime_files)"
-  begin_runtime_rollback "$snapshot"
-  stop_server_keep_config
-  if tun_active; then
-    systemctl stop getout-tun.service 2>/dev/null || true
-    cleanup_rules
+write_client_runtime_files() {
+  local transport="$1" mode="$2" snapshot="$3"
+  if [ "$transport" = "wireguard" ]; then
+    write_wg_config
+    write_routes_scripts
+    preflight_wg_runtime_with_rollback "$snapshot"
+    echo "$mode" > "$MODE_FILE"
+    chmod_private_file "$MODE_FILE"
+    write_wg_service "$mode"
+  else
+    write_tun_config
+    write_routes_scripts
+    preflight_tun_runtime_with_rollback "$snapshot"
+    echo "$mode" > "$MODE_FILE"
+    chmod_private_file "$MODE_FILE"
+    write_tun_service "$mode"
   fi
-  [ -x "$TUN_BIN" ] || download_hev
-  if ! reuse_client_config_for_mode "$mode"; then
-    ask_socks_config "$mode"
-  fi
-  write_tun_config
-  write_routes_scripts
-  preflight_tun_runtime_with_rollback "$snapshot"
-  echo "$mode" > "$MODE_FILE"
-  chmod_private_file "$MODE_FILE"
-  write_tun_service "$mode"
-  warn_ssh_protection_status
-  restart_tun_with_rollback "$snapshot" enable
-  success "${mode} 模式已启动。"
-  status
 }
 
-start_wg_client() {
+restart_client_runtime() {
+  local transport="$1" snapshot="$2" action="${3:-enable}"
+  warn_ssh_protection_status
+  if [ "$transport" = "wireguard" ]; then
+    restart_wg_with_rollback "$snapshot" "$action"
+  else
+    restart_tun_with_rollback "$snapshot" "$action"
+  fi
+}
+
+prepare_socks_client_start() {
   local mode="$1"
-  local snapshot
-  require_root; require_debian; install_deps; ensure_wg
-  ensure_conf_dir
-  snapshot="$(snapshot_runtime_files)"
-  begin_runtime_rollback "$snapshot"
+  ensure_tun
+  stop_server_keep_config
+  if any_client_active; then
+    stop_client_keep_config
+  fi
+  [ -x "$TUN_BIN" ] || download_hev
+  reuse_client_config_for_mode "$mode" || ask_socks_config "$mode"
+}
+
+prepare_wg_client_start() {
+  local mode="$1" snapshot="$2"
+  ensure_wg
   stop_server_keep_config
   if any_client_active; then
     stop_client_keep_config
@@ -1936,16 +1955,129 @@ start_wg_client() {
     fi
     ask_wg_config "$mode"
   fi
-  write_wg_config
-  write_routes_scripts
-  preflight_wg_runtime_with_rollback "$snapshot"
-  echo "$mode" > "$MODE_FILE"
-  chmod_private_file "$MODE_FILE"
-  write_wg_service "$mode"
-  warn_ssh_protection_status
-  restart_wg_with_rollback "$snapshot" enable
+}
+
+start_client_transport() {
+  local transport="$1" mode="$2" snapshot
+  require_root; require_debian; install_deps
+  ensure_conf_dir
+  snapshot="$(snapshot_runtime_files)"
+  begin_runtime_rollback "$snapshot"
+  if [ "$transport" = "wireguard" ]; then
+    prepare_wg_client_start "$mode" "$snapshot"
+  else
+    prepare_socks_client_start "$mode"
+  fi
+  write_client_runtime_files "$transport" "$mode" "$snapshot"
+  restart_client_runtime "$transport" "$snapshot" enable
+}
+
+start_client() {
+  local mode="$1"
+  start_client_transport socks5 "$mode"
+  success "${mode} 模式已启动。"
+  status
+}
+
+start_wg_client() {
+  local mode="$1"
+  start_client_transport wireguard "$mode"
   success "${mode} WireGuard 模式已启动。"
   status
+}
+
+configured_client_transport() {
+  if [ -f "$CLIENT_CONF" ]; then
+    assert_private_config "$CLIENT_CONF"
+    # shellcheck disable=SC1090
+    . "$CLIENT_CONF"
+    printf '%s\n' "${TRANSPORT:-socks5}"
+  else
+    printf 'socks5\n'
+  fi
+}
+
+configure_client_mode() {
+  local transport="$1" default_mode="$2" active_fn="$3" mode
+  if "$active_fn"; then
+    mode="$(current_mode)"
+    case "$transport:$mode" in
+      socks5:v4|socks5:dual|wireguard:wg-v4|wireguard:wg-dual) ;;
+      socks5:*) mode="v4" ;;
+      wireguard:*) mode="wg-v4" ;;
+    esac
+  elif [ -f "$CLIENT_CONF" ]; then
+    assert_private_config "$CLIENT_CONF"
+    # shellcheck disable=SC1090
+    . "$CLIENT_CONF"
+    mode="${MODE:-$default_mode}"
+  else
+    mode="$default_mode"
+  fi
+  printf '%s\n' "$mode"
+}
+
+apply_configured_client_runtime() {
+  local transport="$1" mode="$2" snapshot="$3" was_active="$4" active_success="$5" saved_success="$6"
+  write_client_runtime_files "$transport" "$mode" "$snapshot"
+  if [ "$was_active" = "1" ]; then
+    if [ "$transport" = "wireguard" ]; then
+      systemctl stop getout-wg.service 2>/dev/null || true
+    else
+      systemctl stop getout-tun.service 2>/dev/null || true
+    fi
+    cleanup_rules
+    restart_client_runtime "$transport" "$snapshot" enable
+    success "$active_success"
+    status
+  else
+    clear_runtime_rollback "$snapshot"
+    success "$saved_success"
+    if server_active; then
+      warn "当前入口正在运行，出口信息不会影响当前入口。"
+    fi
+  fi
+}
+
+configure_client_transport() {
+  local transport="$1" mode snapshot was_active
+  require_root; require_debian; install_deps
+  ensure_conf_dir
+  if [ "$transport" = "wireguard" ]; then
+    ensure_wg
+    was_active=0; any_client_active && was_active=1
+    mode="$(configure_client_mode wireguard wg-v4 wg_client_active)"
+  else
+    ensure_tun
+    was_active=0; tun_active && was_active=1
+    mode="$(configure_client_mode socks5 v4 tun_active)"
+  fi
+  snapshot="$(snapshot_runtime_files)"
+  begin_runtime_rollback "$snapshot"
+  if [ "$transport" = "wireguard" ]; then
+    ask_wg_config "$mode"
+    apply_configured_client_runtime wireguard "$mode" "$snapshot" "$was_active" \
+      "WireGuard 出口信息已更新并立即应用。" "WireGuard 出口信息已保存，启动 WireGuard 模式后生效。"
+  else
+    ask_socks_config "$mode"
+    [ -x "$TUN_BIN" ] || download_hev
+    apply_configured_client_runtime socks5 "$mode" "$snapshot" "$was_active" \
+      "出口信息已更新并立即应用。" "出口信息已保存，启动 V4/双栈模式后生效。"
+  fi
+}
+
+configure_client() {
+  local transport
+  transport="$(configured_client_transport)"
+  if [ "$transport" = "wireguard" ]; then
+    configure_wg_client "$@"
+  else
+    configure_client_transport socks5
+  fi
+}
+
+configure_wg_client() {
+  configure_client_transport wireguard
 }
 
 stop_client() {

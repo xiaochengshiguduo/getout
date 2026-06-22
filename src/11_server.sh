@@ -324,6 +324,52 @@ write_wg_server_service() {
     $'ExecStartPre=/sbin/sysctl -w net.ipv4.ip_forward=1\nExecStartPre=/sbin/sysctl -w net.ipv6.conf.all.forwarding=1\n'
 }
 
+ensure_wg_server_config_or_prompt() {
+  local snapshot="$1"
+  if [ -f "$SERVER_CONF" ] && grep -q '^SERVER_MODE=wireguard' "$SERVER_CONF"; then
+    assert_private_config "$SERVER_CONF"
+    return 0
+  fi
+  if [ ! -t 0 ]; then
+    restore_server_or_warn "$snapshot"
+    fatal "未找到 WireGuard 配置，请先交互运行 getout wg-server 或在菜单中选择 2 配置。"
+  fi
+  prompt_wg_server_info
+}
+
+restart_wg_server_with_rollback() {
+  local snapshot="$1" action="${2:-restart}" restore_old="${3:-0}"
+  if [ "$action" = "enable" ]; then
+    systemctl enable --now getout-wg.service
+  else
+    systemctl restart getout-wg.service
+  fi
+  sleep 2
+  if ! systemctl is-active --quiet getout-wg.service; then
+    restore_server_or_warn "$snapshot"
+    [ "$restore_old" = "1" ] && systemctl restart getout-wg.service 2>/dev/null || true
+    fatal "getout-wg.service 启动失败，请查看：journalctl -u getout-wg.service -e"
+  fi
+  clear_runtime_rollback "$snapshot"
+}
+
+maybe_allow_wg_ufw() {
+  command -v ufw >/dev/null 2>&1 || return 0
+  ufw status 2>/dev/null | grep -q "Status: active" || return 0
+  assert_private_config "$SERVER_CONF"
+  # shellcheck disable=SC1090
+  . "$SERVER_CONF"
+  ufw allow "${LISTEN_PORT}/udp" >/dev/null || true
+}
+
+apply_wg_server_config() {
+  local snapshot="$1" action="$2" restore_old="${3:-0}"
+  write_wg_server_service
+  echo "wg-server" > "$MODE_FILE"
+  chmod_private_file "$MODE_FILE"
+  restart_wg_server_with_rollback "$snapshot" "$action" "$restore_old"
+}
+
 start_wg_server() {
   local snapshot
   require_root; require_debian; install_deps
@@ -333,37 +379,9 @@ start_wg_server() {
   stop_client_keep_config
   stop_server_keep_config
   stop_wg_server_keep_config
-  if [ -f "$SERVER_CONF" ] && grep -q '^SERVER_MODE=wireguard' "$SERVER_CONF"; then
-    assert_private_config "$SERVER_CONF"
-    # shellcheck disable=SC1090
-    . "$SERVER_CONF"
-  else
-    if [ ! -t 0 ]; then
-      restore_server_or_warn "$snapshot"
-      fatal "未找到 WireGuard 配置，请先交互运行 getout wg-server 或在菜单中选择 2 配置。"
-    fi
-    prompt_wg_server_info
-  fi
-  [ -f "$SERVER_CONF" ] && grep -q '^SERVER_MODE=wireguard' "$SERVER_CONF" || {
-    restore_server_or_warn "$snapshot"
-    fatal "WireGuard 配置无效。"
-  }
-  write_wg_server_service
-  echo "wg-server" > "$MODE_FILE"
-  chmod_private_file "$MODE_FILE"
-  systemctl enable --now getout-wg.service
-  sleep 2
-  if ! systemctl is-active --quiet getout-wg.service; then
-    restore_server_or_warn "$snapshot"
-    fatal "getout-wg.service 启动失败，请查看：journalctl -u getout-wg.service -e"
-  fi
-  clear_runtime_rollback "$snapshot"
-  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
-    assert_private_config "$SERVER_CONF"
-    # shellcheck disable=SC1090
-    . "$SERVER_CONF"
-    ufw allow "${LISTEN_PORT}/udp" >/dev/null || true
-  fi
+  ensure_wg_server_config_or_prompt "$snapshot"
+  apply_wg_server_config "$snapshot" enable
+  maybe_allow_wg_ufw
   success "入口 WireGuard 模式已启动。"
   status
 }
@@ -381,20 +399,13 @@ configure_wg_server() {
   snapshot="$(snapshot_server_files)"
   begin_server_rollback "$snapshot"
   prompt_wg_server_info
-  write_wg_server_service
   if [ "$was_active" = "1" ]; then
-    systemctl restart getout-wg.service
-    sleep 2
-    if ! systemctl is-active --quiet getout-wg.service; then
-      restore_server_or_warn "$snapshot"
-      systemctl restart getout-wg.service 2>/dev/null || true
-      fatal "getout-wg.service 启动失败，请查看：journalctl -u getout-wg.service -e"
-    fi
-    clear_runtime_rollback "$snapshot"
+    apply_wg_server_config "$snapshot" restart 1
     systemctl enable getout-wg.service >/dev/null 2>&1 || true
     success "入口 WireGuard 信息已更新并立即应用。"
     status
   else
+    write_wg_server_service
     clear_runtime_rollback "$snapshot"
     success "入口 WireGuard 信息已保存，启动入口后生效。"
     if any_client_active; then
