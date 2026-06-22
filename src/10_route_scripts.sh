@@ -149,44 +149,52 @@ apply_runtime_dns() {
   file_checksum /etc/resolv.conf > "$RESOLV_MARKER" 2>/dev/null || true
 }
 
-apply_gai_priority() {
-  local tmp
-  tmp="$(mktemp)" || return 0
-  if [ ! -f "$GAI_ORIG" ]; then
-    if [ -f "$GAI_MARKER" ]; then
-      echo "[警告] 检测到 /etc/gai.conf 可能已由 getout 管理，但原始备份缺失；本次只更新 getout 管理块。" >&2
-    else
-      backup_path /etc/gai.conf "$GAI_ORIG" "$GAI_META"
-    fi
-  fi
+strip_gai_priority_block() {
   awk '
     $0 == "# getout managed priority begin" {skip=1; next}
     $0 == "# getout managed priority end" {skip=0; next}
     !skip {print}
-  ' /etc/gai.conf 2>/dev/null > "$tmp" || true
-  {
-    cat "$tmp" 2>/dev/null || true
-    printf '\n# getout managed priority begin\n'
-    printf 'label ::1/128       0\n'
-    printf 'label ::/0          1\n'
-    printf 'label 2002::/16     2\n'
-    printf 'label ::/96         3\n'
-    printf 'label ::ffff:0:0/96 4\n'
-    printf 'label fec0::/10     5\n'
-    printf 'label fc00::/7      6\n'
-    printf 'label 2001:0::/32   7\n'
-    printf 'precedence ::1/128       50\n'
-    if [ "$PRIORITY_MODE" = "v4" ]; then
-      printf 'precedence ::ffff:0:0/96 100\n'
-      printf 'precedence ::/0          40\n'
-    else
-      printf 'precedence ::/0          40\n'
-      printf 'precedence ::ffff:0:0/96 10\n'
-    fi
-    printf 'precedence 2002::/16     30\n'
-    printf 'precedence ::/96         20\n'
-    printf '# getout managed priority end\n'
-  } > /etc/gai.conf 2>/dev/null || true
+  ' /etc/gai.conf 2>/dev/null
+}
+
+backup_gai_for_priority() {
+  [ ! -f "$GAI_ORIG" ] || return 0
+  if [ -f "$GAI_MARKER" ]; then
+    echo "[警告] 检测到 /etc/gai.conf 可能已由 getout 管理，但原始备份缺失；本次只更新 getout 管理块。" >&2
+  else
+    backup_path /etc/gai.conf "$GAI_ORIG" "$GAI_META"
+  fi
+}
+
+print_gai_priority_block() {
+  printf '\n# getout managed priority begin\n'
+  printf 'label ::1/128       0\n'
+  printf 'label ::/0          1\n'
+  printf 'label 2002::/16     2\n'
+  printf 'label ::/96         3\n'
+  printf 'label ::ffff:0:0/96 4\n'
+  printf 'label fec0::/10     5\n'
+  printf 'label fc00::/7      6\n'
+  printf 'label 2001:0::/32   7\n'
+  printf 'precedence ::1/128       50\n'
+  if [ "$PRIORITY_MODE" = "v4" ]; then
+    printf 'precedence ::ffff:0:0/96 100\n'
+    printf 'precedence ::/0          40\n'
+  else
+    printf 'precedence ::/0          40\n'
+    printf 'precedence ::ffff:0:0/96 10\n'
+  fi
+  printf 'precedence 2002::/16     30\n'
+  printf 'precedence ::/96         20\n'
+  printf '# getout managed priority end\n'
+}
+
+apply_gai_priority() {
+  local tmp
+  tmp="$(mktemp)" || return 0
+  backup_gai_for_priority
+  strip_gai_priority_block > "$tmp" || true
+  { cat "$tmp" 2>/dev/null || true; print_gai_priority_block; } > /etc/gai.conf 2>/dev/null || true
   file_checksum /etc/gai.conf > "$GAI_MARKER" 2>/dev/null || true
   rm -f "$tmp" 2>/dev/null || true
 }
@@ -314,20 +322,28 @@ restore_dns() {
   restore_path /etc/resolv.conf "$RESOLV_ORIG" "$RESOLV_META" "$RESOLV_MARKER" /etc/resolv.conf "$RESOLV_TARGET_ORIG"
 }
 
+strip_gai_priority_block() {
+  awk '
+    $0 == "# getout managed priority begin" {skip=1; next}
+    $0 == "# getout managed priority end" {skip=0; next}
+    !skip {print}
+  ' /etc/gai.conf 2>/dev/null
+}
+
+remove_gai_priority_block() {
+  local tmp
+  tmp="$(mktemp)" || return 0
+  strip_gai_priority_block > "$tmp" || true
+  cat "$tmp" > /etc/gai.conf 2>/dev/null || true
+  rm -f "$tmp" 2>/dev/null || true
+  rm -f "$GAI_MARKER" 2>/dev/null || true
+}
+
 restore_gai() {
   if [ -f "$GAI_ORIG" ]; then
     restore_path /etc/gai.conf "$GAI_ORIG" "$GAI_META" "$GAI_MARKER" /etc/gai.conf
   elif [ -f "$GAI_MARKER" ]; then
-    local tmp
-    tmp="$(mktemp)" || return 0
-    awk '
-      $0 == "# getout managed priority begin" {skip=1; next}
-      $0 == "# getout managed priority end" {skip=0; next}
-      !skip {print}
-    ' /etc/gai.conf 2>/dev/null > "$tmp" || true
-    cat "$tmp" > /etc/gai.conf 2>/dev/null || true
-    rm -f "$tmp" 2>/dev/null || true
-    rm -f "$GAI_MARKER" 2>/dev/null || true
+    remove_gai_priority_block
   fi
 }
 
