@@ -1385,38 +1385,21 @@ configure_server() {
 
 # --- WireGuard 模式 ---
 
-prompt_wg_server_info() {
-  require_root; require_debian; install_deps
-  ensure_conf_dir
-  local listen_port
+generate_wg_keypair() {
+  local private_key public_key
+  private_key="$(wg genkey)" || fatal "生成私钥失败，请确认 wireguard-tools 已安装。"
+  public_key="$(printf '%s' "$private_key" | wg pubkey)" || fatal "派生公钥失败。"
+  printf '%s %s\n' "$private_key" "$public_key"
+}
 
-  # 只询问端口
-  read -rp "端口 [默认: ${DEFAULT_WG_PORT}]: " listen_port
-  listen_port="${listen_port:-$DEFAULT_WG_PORT}"
-  require_valid_port "端口" "$listen_port"
-
-  # 固定参数（无需询问）
+write_wg_server_info_conf() {
+  local listen_port="$1" private_key="$2" peer_private="$3" peer_public_key="$4"
   local listen_addr="::"
   local address="$DEFAULT_WG_ADDRESS"
   local full_address="${address}, ${DEFAULT_WG_V6_ADDRESS}"
-
-  # 自动生成服务端密钥对
-  local private_key
-  private_key="$(wg genkey)" || fatal "生成私钥失败，请确认 wireguard-tools 已安装。"
-  local server_pub
-  server_pub="$(printf '%s' "$private_key" | wg pubkey)" || fatal "派生公钥失败。"
-
-  # 自动生成客户端密钥对
-  local peer_private peer_public_key
-  peer_private="$(wg genkey)" || fatal "生成客户端私钥失败。"
-  peer_public_key="$(printf '%s' "$peer_private" | wg pubkey)" || fatal "派生客户端公钥失败。"
-
-  # 从隧道地址推导对端 IP：服务端 .1 → 对端 .2
   local peer4="${address%.*}.2/32"
   local peer6="${DEFAULT_WG_V6_ADDRESS%%::*}::2/128"
   local allowed_ips="${peer4},${peer6}"
-
-  # 写入配置
   {
     printf 'SERVER_MODE=wireguard\n'
     printf 'LISTEN_ADDRESS=%s\n' "$(shell_quote "$listen_addr")"
@@ -1428,6 +1411,21 @@ prompt_wg_server_info() {
     printf 'ALLOWED_IPS=%s\n' "$(shell_quote "$allowed_ips")"
   } > "$SERVER_CONF"
   chmod_private_file "$SERVER_CONF"
+}
+
+prompt_wg_server_info() {
+  require_root; require_debian; install_deps
+  ensure_conf_dir
+  local listen_port server_pair peer_pair private_key peer_private peer_public_key
+  read -rp "端口 [默认: ${DEFAULT_WG_PORT}]: " listen_port
+  listen_port="${listen_port:-$DEFAULT_WG_PORT}"
+  require_valid_port "端口" "$listen_port"
+  server_pair="$(generate_wg_keypair)"
+  peer_pair="$(generate_wg_keypair)"
+  private_key="${server_pair%% *}"
+  peer_private="${peer_pair%% *}"
+  peer_public_key="${peer_pair#* }"
+  write_wg_server_info_conf "$listen_port" "$private_key" "$peer_private" "$peer_public_key"
 }
 
 validate_wg_server_conf() {
@@ -1452,6 +1450,16 @@ wg_server_peer_allowed() {
   printf '%s\n' "${addr_v4%.*}.2/32,${DEFAULT_WG_V6_ADDRESS%%::*}::2/128"
 }
 
+wg_nat_family_lines() {
+  local cmd="$1" net="$2"
+  printf 'PostUp = %s -t nat -A POSTROUTING -s %s ! -o %%i -j MASQUERADE\n' "$cmd" "$net"
+  printf 'PostUp = %s -A FORWARD -i %%i -j ACCEPT\n' "$cmd"
+  printf 'PostUp = %s -A FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT\n' "$cmd"
+  printf 'PostDown = %s -t nat -D POSTROUTING -s %s ! -o %%i -j MASQUERADE\n' "$cmd" "$net"
+  printf 'PostDown = %s -D FORWARD -i %%i -j ACCEPT\n' "$cmd"
+  printf 'PostDown = %s -D FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT\n' "$cmd"
+}
+
 wg_server_nat_lines() {
   local v4_net="" v6_net="" addr_part
   IFS=',' read -r -a _wg_addr_parts <<< "$ADDRESS"
@@ -1464,22 +1472,8 @@ wg_server_nat_lines() {
       v4_net="$(get_v4_network "$addr_part")"
     fi
   done
-  if [ -n "$v4_net" ]; then
-    printf 'PostUp = iptables -t nat -A POSTROUTING -s %s ! -o %%i -j MASQUERADE\n' "$v4_net"
-    printf 'PostUp = iptables -A FORWARD -i %%i -j ACCEPT\n'
-    printf 'PostUp = iptables -A FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT\n'
-    printf 'PostDown = iptables -t nat -D POSTROUTING -s %s ! -o %%i -j MASQUERADE\n' "$v4_net"
-    printf 'PostDown = iptables -D FORWARD -i %%i -j ACCEPT\n'
-    printf 'PostDown = iptables -D FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT\n'
-  fi
-  if [ -n "$v6_net" ] && command -v ip6tables >/dev/null 2>&1; then
-    printf 'PostUp = ip6tables -t nat -A POSTROUTING -s %s ! -o %%i -j MASQUERADE\n' "$v6_net"
-    printf 'PostUp = ip6tables -A FORWARD -i %%i -j ACCEPT\n'
-    printf 'PostUp = ip6tables -A FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT\n'
-    printf 'PostDown = ip6tables -t nat -D POSTROUTING -s %s ! -o %%i -j MASQUERADE\n' "$v6_net"
-    printf 'PostDown = ip6tables -D FORWARD -i %%i -j ACCEPT\n'
-    printf 'PostDown = ip6tables -D FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT\n'
-  fi
+  [ -n "$v4_net" ] && wg_nat_family_lines iptables "$v4_net"
+  [ -n "$v6_net" ] && command -v ip6tables >/dev/null 2>&1 && wg_nat_family_lines ip6tables "$v6_net"
 }
 
 write_wg_server_conf_file() {
