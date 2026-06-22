@@ -193,6 +193,24 @@ reuse_wg_client_config() {
   return 0
 }
 
+print_wg_interface_config() {
+  printf '[Interface]\n'
+  printf 'PrivateKey = %s\n' "$WG_CLIENT_PRIVATE_KEY"
+  printf 'Address = %s\n' "${WG_CLIENT_ADDRESS:-$(default_wg_addr "${MODE:-wg-v4}")}"
+  [ -n "${WG_DNS:-$DEFAULT_WG_DNS}" ] && printf 'DNS = %s\n' "${WG_DNS:-$DEFAULT_WG_DNS}"
+  printf 'Table = off\n'
+}
+
+print_wg_peer_config() {
+  local endpoint_host="$1"
+  printf '\n[Peer]\n'
+  printf 'PublicKey = %s\n' "$WG_SERVER_PUBLIC_KEY"
+  [ -n "${WG_PRESHARED_KEY:-}" ] && printf 'PresharedKey = %s\n' "$WG_PRESHARED_KEY"
+  printf 'Endpoint = %s:%s\n' "$endpoint_host" "$WG_SERVER_PORT"
+  printf 'AllowedIPs = 0.0.0.0/0, ::/0\n'
+  printf 'PersistentKeepalive = 25\n'
+}
+
 write_wg_config() {
   assert_private_config "$CLIENT_CONF"
   # shellcheck disable=SC1090
@@ -207,21 +225,7 @@ write_wg_config() {
   local endpoint_host
   endpoint_host="$(format_endpoint_host "${WG_SERVER_ADDRESS:-}")"
 
-  local iface="${TUN_NAME:-getout-${WG_IFACE}}"
-  cat > "$WG_CONF" <<EOF
-[Interface]
-PrivateKey = ${WG_CLIENT_PRIVATE_KEY}
-Address = ${WG_CLIENT_ADDRESS:-$(default_wg_addr "${MODE:-wg-v4}")}
-$(if [ -n "${WG_DNS:-$DEFAULT_WG_DNS}" ]; then echo "DNS = ${WG_DNS:-$DEFAULT_WG_DNS}"; fi)
-Table = off
-
-[Peer]
-PublicKey = ${WG_SERVER_PUBLIC_KEY}
-$(if [ -n "${WG_PRESHARED_KEY:-}" ]; then echo "PresharedKey = ${WG_PRESHARED_KEY}"; fi)
-Endpoint = ${endpoint_host}:${WG_SERVER_PORT}
-AllowedIPs = 0.0.0.0/0, ::/0
-PersistentKeepalive = 25
-EOF
+  { print_wg_interface_config; print_wg_peer_config "$endpoint_host"; } > "$WG_CONF"
   chmod_private_file "$WG_CONF"
 }
 
@@ -261,12 +265,8 @@ validate_socks_config() {
   [ -z "${SOCKS_PASSWORD:-}" ] || reject_url_unsafe "SOCKS_PASSWORD" "$SOCKS_PASSWORD"
 }
 
-write_tun_config() {
-  assert_private_config "$CLIENT_CONF"
-  # shellcheck disable=SC1090
-  . "$CLIENT_CONF"
-  validate_socks_config
-  cat > "$TUN_CONF" <<EOF
+print_tun_base_config() {
+  cat <<EOF
 tunnel:
   name: $TUN_NAME
   mtu: 8500
@@ -280,18 +280,31 @@ socks5:
   udp: 'tcp'
   mark: $MARK_ID
 EOF
-  if [ -n "${SOCKS_USERNAME:-}" ]; then
-    cat >> "$TUN_CONF" <<EOF
+}
+
+print_tun_auth_config() {
+  [ -n "${SOCKS_USERNAME:-}" ] || return 0
+  cat <<EOF
   username: $(yaml_quote "$SOCKS_USERNAME")
   password: $(yaml_quote "$SOCKS_PASSWORD")
 EOF
-  fi
-  cat >> "$TUN_CONF" <<'EOF'
+}
+
+print_tun_misc_config() {
+  cat <<'EOF'
 
 misc:
   log-level: warn
   limit-nofile: 65535
 EOF
+}
+
+write_tun_config() {
+  assert_private_config "$CLIENT_CONF"
+  # shellcheck disable=SC1090
+  . "$CLIENT_CONF"
+  validate_socks_config
+  { print_tun_base_config; print_tun_auth_config; print_tun_misc_config; } > "$TUN_CONF"
   chmod_private_file "$TUN_CONF"
 }
 
@@ -547,33 +560,21 @@ apply_client_priority_runtime() {
   if [ "$transport" = "wireguard" ]; then
     wg_client_active && was_active=1
     mode="${MODE:-wg-v4}"
-    write_wg_config
-    write_routes_scripts
-    write_wg_service "$mode"
-    preflight_wg_runtime_with_rollback "$snapshot"
-    if [ "$was_active" = "1" ]; then
-      systemctl stop getout-wg.service 2>/dev/null || true
-      cleanup_rules
-      warn_ssh_protection_status
-      restart_wg_with_rollback "$snapshot" enable
-    else
-      clear_runtime_rollback "$snapshot"
-    fi
   else
     tun_active && was_active=1
     mode="${MODE:-v4}"
-    write_tun_config
-    write_routes_scripts
-    write_tun_service "$mode"
-    preflight_tun_runtime_with_rollback "$snapshot"
-    if [ "$was_active" = "1" ]; then
-      systemctl stop getout-tun.service 2>/dev/null || true
-      cleanup_rules
-      warn_ssh_protection_status
-      restart_tun_with_rollback "$snapshot" enable
+  fi
+  write_client_runtime_files "$transport" "$mode" "$snapshot"
+  if [ "$was_active" = "1" ]; then
+    if [ "$transport" = "wireguard" ]; then
+      systemctl stop getout-wg.service 2>/dev/null || true
     else
-      clear_runtime_rollback "$snapshot"
+      systemctl stop getout-tun.service 2>/dev/null || true
     fi
+    cleanup_rules
+    restart_client_runtime "$transport" "$snapshot" enable
+  else
+    clear_runtime_rollback "$snapshot"
   fi
 }
 
