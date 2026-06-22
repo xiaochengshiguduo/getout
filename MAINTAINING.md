@@ -42,7 +42,7 @@ tests/
 - `07_deps_downloads.sh`: Debian/root checks, apt deps, TUN checks, gost/tun2socks downloads.
 - `08_helpers.sh`: quoting, escaping, IP/address helpers, SSH detection, and main IP detection.
 - `09_runtime_safety.sh`: fallback cleanup, tun preflight, and restart-with-rollback wrappers.
-- `10_route_scripts.sh`: generation of `routes-up.sh` and `routes-down.sh`.
+- `10_route_scripts.sh`: route up/down runtime hooks plus tiny generated wrappers that call `getout route-up` / `getout route-down`.
 - `11_server.sh`: entry/server mode service/config flows.
 - `12_client.sh`: outlet/client mode config, tun/WireGuard config rendering, services, and priority switching.
 - `13_lifecycle_status_doctor.sh`: cleanup, restart, uninstall, status, public-IP checks, and doctor/check.
@@ -57,7 +57,8 @@ tests/
 - Do not change `status` plaintext password/key output unless the project owner explicitly changes that design decision.
 - Load `server.conf` / `client.conf` through `load_server_conf` / `load_client_conf` instead of open-coding `source` plus permission checks.
 - Treat `server.conf` / `client.conf` as trusted root-owned shell config, not untrusted data. Keep permission checks before sourcing them.
-- Keep generated route script changes conservative: `routes-down.sh` should prefer best-effort cleanup over failing early, and route scripts must not install packages during systemd startup.
+- Keep route-down conservative: it should prefer best-effort cleanup over failing early, and route hooks must not install packages during systemd startup.
+- Keep DNS64 fallback support in downloads; IPv6-only machines are a target environment.
 - Prefer adding tests in `tests/run.sh` before or with behavior changes.
 - Keep `getout.sh` single-file install/update behavior intact unless the install/update flow is explicitly redesigned.
 

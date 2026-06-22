@@ -46,7 +46,11 @@ run_route_script_syntax() {
     write_routes_scripts
     bash -n "$ROUTES_UP"
     bash -n "$ROUTES_DOWN"
-    grep -q '^ensure_nftables()' "$ROUTES_UP"
+    grep -Fq 'exec "' "$ROUTES_UP"
+    grep -q ' route-up$' "$ROUTES_UP"
+    grep -q ' route-down$' "$ROUTES_DOWN"
+    grep -q 'route-up) route_up' "$SCRIPT"
+    grep -q 'route-down) route_down' "$SCRIPT"
     ! grep -q 'apt-get' "$ROUTES_UP"
   )
   pass 'generated route scripts syntax'
@@ -255,8 +259,8 @@ run_stop_cleanup_order_protects_control_plane() {
     mkdir -p "$CONF_DIR"
     write_routes_scripts
     write_tun_service dual
-    lookup_line="$(grep -n 'ip rule del lookup "\$TABLE_ID" pref 20' "$ROUTES_DOWN" | head -n1 | cut -d: -f1)"
-    nft_line="$(grep -n 'nft delete table inet "\$NFT_TABLE"' "$ROUTES_DOWN" | head -n1 | cut -d: -f1)"
+    lookup_line="$(grep -n 'route_run_all ip rule del lookup "\$TABLE_ID" pref 20' "$lib" | head -n1 | cut -d: -f1)"
+    nft_line="$(grep -n 'route_run nft delete table inet "\$NFT_TABLE"' "$lib" | head -n1 | cut -d: -f1)"
     [ -n "$lookup_line" ] && [ -n "$nft_line" ] && [ "$lookup_line" -lt "$nft_line" ]
     grep -q "^ExecStop=$ROUTES_DOWN$" "$TUN_SERVICE"
     grep -q "^ExecStopPost=$ROUTES_DOWN$" "$TUN_SERVICE"

@@ -132,7 +132,7 @@ main() {
     *) secure_existing_files ;;
   esac
   case "${1:-}" in
-    uninstall|remove|un|doctor|check|-h|--help|help) ;;
+    uninstall|remove|un|doctor|check|route-up|route-down|-h|--help|help) ;;
     *) ensure_global_command ;;
   esac
 
@@ -147,6 +147,8 @@ main() {
     restart) restart_getout ;;
     status) status ;;
     doctor|check) doctor_check ;;
+    route-up) route_up ;;
+    route-down) route_down ;;
     update) update_getout ;;
     uninstall|remove|un) uninstall_all ;;
     -h|--help|help) usage ;;
