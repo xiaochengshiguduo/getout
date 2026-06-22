@@ -912,6 +912,20 @@ restore_path() {
 }
 is_ipv6() { [[ "${1:-}" == *:* ]]; }
 is_ipv4() { [[ "${1:-}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; }
+valid_uint() { [[ "${1:-}" =~ ^[0-9]+$ ]]; }
+valid_name() { [[ "${1:-}" =~ ^[A-Za-z0-9_.:-]+$ ]]; }
+valid_mode() { [[ "${1:-}" =~ ^(v4|dual|wg-v4|wg-dual)$ ]]; }
+valid_priority() { [[ "${1:-}" =~ ^(v4|v6)$ ]]; }
+validate_route_config() {
+  valid_uint "$TABLE_ID" || { echo "[错误] TABLE_ID 无效：$TABLE_ID" >&2; return 1; }
+  valid_uint "$MARK_ID" || { echo "[错误] MARK_ID 无效：$MARK_ID" >&2; return 1; }
+  valid_uint "$BYPASS_MARK_ID" || { echo "[错误] BYPASS_MARK_ID 无效：$BYPASS_MARK_ID" >&2; return 1; }
+  valid_name "$NFT_TABLE" || { echo "[错误] NFT_TABLE 无效：$NFT_TABLE" >&2; return 1; }
+  valid_name "$TUN_NAME" || { echo "[错误] TUN_NAME 无效：$TUN_NAME" >&2; return 1; }
+  valid_mode "$MODE" || { echo "[错误] MODE 无效：$MODE" >&2; return 1; }
+  valid_priority "$PRIORITY_MODE" || { echo "[错误] PRIORITY_MODE 无效：$PRIORITY_MODE" >&2; return 1; }
+}
+validate_route_config
 add4_to_main() { [ -n "${1:-}" ] && run_all ip rule del to "$1" lookup main pref "$2" && run ip rule add to "$1" lookup main pref "$2"; }
 add6_to_main() { [ -n "${1:-}" ] && run_all ip -6 rule del to "$1" lookup main pref "$2" && run ip -6 rule add to "$1" lookup main pref "$2"; }
 ssh_listen_ports() {
@@ -1079,6 +1093,8 @@ NFT_TABLE="${NFT_TABLE:-getout_protect}"
 TUN_NAME="${TUN_NAME:-tun0}"
 RUNTIME_DNS_SERVERS="${RUNTIME_DNS_SERVERS:-2001:4860:4860::8888 2606:4700:4700::1111}"
 RUNTIME_DNS_ENABLE="${RUNTIME_DNS_ENABLE:-1}"
+MODE="${MODE:-v4}"
+PRIORITY_MODE="${PRIORITY_MODE:-v6}"
 RESOLV_ORIG="$CONF_DIR/resolv.conf.orig"
 GAI_ORIG="$CONF_DIR/gai.conf.orig"
 RESOLV_MARKER="$CONF_DIR/resolv.conf.getout"
