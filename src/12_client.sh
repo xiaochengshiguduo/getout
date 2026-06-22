@@ -34,19 +34,21 @@ runtime_dns_servers_text() {
   esac
 }
 
-write_runtime_common_conf() {
-  local priority_mode="${1:-}" tun_name="${2:-$TUN_NAME}" iface="${3:-}"
-  local ssh_ip ssh_ports v4 v6 runtime_dns
-  case "$priority_mode" in v4|v6) ;; *) priority_mode="$(current_priority_mode)" ;; esac
+write_runtime_detection_conf() {
+  local ssh_ip ssh_ports v4 v6
   ssh_ip="$(ssh_remote_ip || true)"
   ssh_ports="$(ssh_listen_ports 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//' || true)"
   v4="$(main_ipv4 || true)"
   v6="$(main_ipv6 || true)"
-  runtime_dns="$(runtime_dns_servers_text "$priority_mode")"
   printf 'SSH_REMOTE_IP=%s\n' "$(shell_quote "$ssh_ip")"
   printf 'SSH_PORTS=%s\n' "$(shell_quote "$ssh_ports")"
   printf 'MAIN_IPV4=%s\n' "$(shell_quote "$v4")"
   printf 'MAIN_IPV6=%s\n' "$(shell_quote "$v6")"
+}
+
+write_runtime_policy_conf() {
+  local priority_mode="$1" tun_name="$2" iface="$3" runtime_dns
+  runtime_dns="$(runtime_dns_servers_text "$priority_mode")"
   printf 'TABLE_ID=%s\n' "$(shell_quote "$TABLE_ID")"
   printf 'MARK_ID=%s\n' "$(shell_quote "$MARK_ID")"
   printf 'BYPASS_MARK_ID=%s\n' "$(shell_quote "$BYPASS_MARK_ID")"
@@ -56,6 +58,13 @@ write_runtime_common_conf() {
   printf 'PRIORITY_MODE=%s\n' "$(shell_quote "$priority_mode")"
   printf 'RUNTIME_DNS_SERVERS=%s\n' "$(shell_quote "$runtime_dns")"
   printf 'RUNTIME_DNS_ENABLE=1\n'
+}
+
+write_runtime_common_conf() {
+  local priority_mode="${1:-}" tun_name="${2:-$TUN_NAME}" iface="${3:-}"
+  case "$priority_mode" in v4|v6) ;; *) priority_mode="$(current_priority_mode)" ;; esac
+  write_runtime_detection_conf
+  write_runtime_policy_conf "$priority_mode" "$tun_name" "$iface"
 }
 
 write_client_conf() {
