@@ -95,7 +95,8 @@ update_getout() {
       local yn
       read -rp "是否立即执行 getout restart? [y/N]: " yn
       if [[ "$yn" =~ ^[Yy]$ ]]; then
-        exec "$INSTALL_PATH" restart
+        "$INSTALL_PATH" restart || true
+        return 0
       fi
     fi
     warn "已跳过自动重启。请稍后执行 getout restart。"
