@@ -140,6 +140,7 @@ uninstall_all() {
   systemctl daemon-reload 2>/dev/null || true
   systemctl reset-failed getout-tun.service getout-gost.service getout-wg.service 2>/dev/null || true
   success "getout 已卸载并清理完成。"
+  exit 0
 }
 
 print_status_address() {

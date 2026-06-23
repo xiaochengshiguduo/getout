@@ -83,9 +83,19 @@ handle_menu_choice() {
 
 menu() {
   local choice
-  print_menu
-  read -rp "请选择 [1-14]: " choice
-  handle_menu_choice "$choice"
+  while true; do
+    print_menu
+    read -rp "请选择 [1-14]: " choice || exit 0
+    case "$choice" in
+      14) exit 0 ;;
+      # 卸载需在子 shell 外执行：卸载成功后 uninstall_all 会 exit 0 直接退出面板；取消则返回菜单
+      13) confirm_uninstall; echo; read -rp "按回车键返回主菜单..." _ || exit 0; continue ;;
+    esac
+    # 子 shell 隔离单个操作：即使操作内部 fatal/exit，也只回到主菜单，不会退出面板
+    ( handle_menu_choice "$choice" ) || true
+    echo
+    read -rp "按回车键返回主菜单..." _ || exit 0
+  done
 }
 
 usage() {
