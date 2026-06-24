@@ -257,6 +257,7 @@ status() {
   tun_active && tun_state="运行中"
   (wg_server_active || wg_client_active) && wg_state="运行中"
 
+  clear || true
   print_header "getout 状态" "$CYAN"
   echo "版本: $SCRIPT_VERSION"
   echo
@@ -347,6 +348,7 @@ doctor_check() {
   local mode
   doctor_failed=0
   mode="$(current_mode)"
+  clear || true
   print_header "getout doctor" "$CYAN"
   echo "版本: $SCRIPT_VERSION"
   echo

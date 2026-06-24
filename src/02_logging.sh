@@ -10,7 +10,11 @@ fatal() { err "$*"; exit 1; }
 
 print_header() {
   local title="$1" color="${2:-$BLUE}"
-  printf '%b====================================================%b\n' "$color" "$NC"
-  printf '%b%26s%b\n' "$color" "$title" "$NC"
-  printf '%b====================================================%b\n' "$color" "$NC"
+  local line="===================================================="
+  local line_len=${#line}
+  local title_display_len=$(printf '%s' "$title" | wc -m)
+  local padding=$(( (line_len - title_display_len) / 2 ))
+  printf '%b%s%b\n' "$color" "$line" "$NC"
+  printf '%b%*s%s%b\n' "$color" "$padding" "" "$title" "$NC"
+  printf '%b%s%b\n' "$color" "$line" "$NC"
 }

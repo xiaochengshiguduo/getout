@@ -99,9 +99,13 @@ fatal() { err "$*"; exit 1; }
 
 print_header() {
   local title="$1" color="${2:-$BLUE}"
-  printf '%b====================================================%b\n' "$color" "$NC"
-  printf '%b%26s%b\n' "$color" "$title" "$NC"
-  printf '%b====================================================%b\n' "$color" "$NC"
+  local line="===================================================="
+  local line_len=${#line}
+  local title_display_len=$(printf '%s' "$title" | wc -m)
+  local padding=$(( (line_len - title_display_len) / 2 ))
+  printf '%b%s%b\n' "$color" "$line" "$NC"
+  printf '%b%*s%s%b\n' "$color" "$padding" "" "$title" "$NC"
+  printf '%b%s%b\n' "$color" "$line" "$NC"
 }
 # --- 03 self install / update / checksum -------------------------------------
 
@@ -2408,6 +2412,7 @@ status() {
   tun_active && tun_state="运行中"
   (wg_server_active || wg_client_active) && wg_state="运行中"
 
+  clear || true
   print_header "getout 状态" "$CYAN"
   echo "版本: $SCRIPT_VERSION"
   echo
@@ -2498,6 +2503,7 @@ doctor_check() {
   local mode
   doctor_failed=0
   mode="$(current_mode)"
+  clear || true
   print_header "getout doctor" "$CYAN"
   echo "版本: $SCRIPT_VERSION"
   echo
